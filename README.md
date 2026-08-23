@@ -82,6 +82,15 @@ It ignores code mechanics, errors and tooling entirely. That's noise.
 `data_semantics` · `hygiene_rule` · `implicit_constraint` · `objective_tradeoff` ·
 `acceptance_heuristic` · `exception_override` · `vocabulary`
 
+## Why the output is committed
+
+`out/` is tracked, deliberately. Codex's store is per-machine and gets pruned;
+Entire's uncommitted session state lives in `.git/entire-sessions/` and is wiped by
+`entire clean`. Neither is a durable home for knowledge.
+
+Once a session is harvested, the summary and its claims live **here**, in this repo,
+version controlled. That is the record. The upstream sources are just feeds.
+
 ## Important
 
 **Nothing here is truth.** These are extracted claims with evidence attached, for a
