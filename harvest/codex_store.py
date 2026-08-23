@@ -80,24 +80,35 @@ def sessions_for(repo: Path, since_days: int = 30) -> list[Session]:
             s.started_at = datetime.fromtimestamp(first_ms / 1000, timezone.utc).isoformat()
 
             lines: list[str] = []
-            for itype, d, _ in parsed:
+            for itype, d, ms in parsed:
+                ts = datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat()
                 if itype == "userMessage":
-                    t = _text(d).strip()
-                    if t:
-                        s.prompts.append(t)
-                        lines.append(f"USER: {t}")
+                    txt = _text(d).strip()
+                    if txt:
+                        s.prompts.append(txt)
+                        lines.append(f"USER: {txt}")
+                        s.turns.append({"role": "user", "text": txt, "ts": ts})
                 elif itype == "agentMessage":
-                    t = _text(d).strip()
-                    if t:
-                        lines.append(f"AGENT: {t}")
+                    txt = _text(d).strip()
+                    if txt:
+                        lines.append(f"AGENT: {txt}")
+                        s.turns.append({"role": "assistant", "text": txt, "ts": ts})
                 elif itype == "commandExecution":
                     cmd = (d.get("command") or "").strip()
                     if cmd:
                         lines.append(f"[ran] {cmd[:200]}")
+                        s.turns.append({"role": "tool", "kind": "exec", "text": cmd,
+                                        "output": (d.get("aggregatedOutput") or "")[:2000],
+                                        "status": d.get("status", ""), "ts": ts})
+                elif itype == "reasoning":
+                    s.turns.append({"role": "reasoning", "text": _text(d).strip()[:2000], "ts": ts})
                 elif itype == "fileChange":
-                    for p in d.get("paths", []) or ([d["path"]] if d.get("path") else []):
-                        if p not in s.files:
-                            s.files.append(p)
+                    paths = d.get("paths", []) or ([d["path"]] if d.get("path") else [])
+                    for fp in paths:
+                        if fp not in s.files:
+                            s.files.append(fp)
+                    s.turns.append({"role": "tool", "kind": "edit",
+                                    "text": ", ".join(paths), "ts": ts})
 
             s.transcript = "\n\n".join(lines)
             out.append(s)

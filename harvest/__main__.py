@@ -13,8 +13,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import codex_store, sources
+from . import chats, codex_store, sources
 from .extract import extract
+from . import page as pagegen
 from .gate import assess, human_turns
 from .render import to_markdown
 
@@ -131,6 +132,120 @@ def _write(sess, result: dict, label: str) -> Path:
     return path
 
 
+def _gather(repo: Path, since: str, source: str = "both") -> list:
+    """Every session for this repo, from both sources, merged.
+
+    The two sources are complementary, not redundant: Entire has the commit and
+    the diff, Codex has the structured turns. Taking one and discarding the other
+    loses half the session.
+    """
+    found: list = []
+    if source in ("entire", "both"):
+        found += sources.sessions(repo, since)
+    if source in ("codex", "both"):
+        days = int("".join(c for c in since if c.isdigit()) or 30)
+        found += codex_store.sessions_for(repo, days)
+    return _merge(found)
+
+
+def _merge(found: list) -> list:
+    """Fold sessions sharing an id into one, keeping the best of each field."""
+    by_id: dict = {}
+    for s in found:
+        key = s.session_id or s.checkpoint_id
+        prev = by_id.get(key)
+        if prev is None:
+            by_id[key] = s
+            continue
+        # Prefer real structured turns, a real commit, and the longer transcript.
+        prev.turns = prev.turns or s.turns
+        prev.commits = prev.commits or s.commits
+        prev.diff = prev.diff if len(prev.diff) >= len(s.diff) else s.diff
+        if len(s.transcript) > len(prev.transcript):
+            prev.transcript = s.transcript
+        prev.prompts = prev.prompts or s.prompts
+        prev.model = prev.model or s.model
+        prev.agent = prev.agent or s.agent
+        prev.started_at = min(x for x in (prev.started_at, s.started_at) if x) \
+            if (prev.started_at and s.started_at) else (prev.started_at or s.started_at)
+        prev.files = sorted(set(prev.files) | set(s.files))
+        # Entire's checkpoint id is the durable one; keep it over "codex:..."
+        if s.checkpoint_id and not s.checkpoint_id.startswith("codex:"):
+            prev.checkpoint_id = s.checkpoint_id
+    return list(by_id.values())
+
+
+def cmd_capture(args) -> int:
+    """Keep every conversation. Free — no model is called."""
+    repo = Path(args.repo).resolve()
+    if not (repo / ".git").exists():
+        print(f"Not a git repo: {repo}", file=sys.stderr)
+        return 1
+
+    live = sources.active_sessions(repo)
+    if args.ended:
+        live.discard(args.ended)
+
+    saved = skipped = 0
+    for sess in _gather(repo, args.since, "both"):
+        if sess.session_id in live:
+            skipped += 1
+            continue
+        _, changed = chats.save(OUT, sess)
+        saved += 1 if changed else 0
+
+    total = len(chats.load_all(OUT))
+    note = f", {skipped} still running" if skipped else ""
+    print(f"Chats: {saved} new or updated, {total} kept in total{note}.")
+    pagegen.build(OUT)
+    return 0
+
+
+def cmd_run(args) -> int:
+    repo = Path(args.repo).resolve()
+    if not (repo / ".git").exists():
+        print(f"Not a git repo: {repo}", file=sys.stderr)
+        return 1
+
+    if args.working:
+        diff = sources.working_diff(repo)
+        if not diff.strip():
+            print("No uncommitted changes to summarise.")
+            return 0
+        sess = sources.Session(checkpoint_id="working", agent="(uncommitted)")
+        sess.diff, sess.transcript = diff, "(no transcript — uncommitted working tree)"
+        d = assess(sess, min_words=args.min_words)
+        if not d.run and not args.force:
+            print(f"Skipped without spending: {d}")
+            return 0
+        if args.dry_run:
+            print(f"Would send {len(diff)} chars of diff, no transcript.")
+            return 0
+        result = extract(sess.transcript, sess.diff, sources.git_log(repo), model_name=args.model)
+        print(f"Wrote {_write(sess, result, 'working')}")
+        return 0
+
+    candidates = _gather(repo, args.since, args.source)
+
+    live = sources.active_sessions(repo)
+    if args.ended:
+        live.discard(args.ended)
+
+    saved = skipped = 0
+    for sess in _gather(repo, args.since, "both"):
+        if sess.session_id in live:
+            skipped += 1
+            continue
+        _, changed = chats.save(OUT, sess)
+        saved += 1 if changed else 0
+
+    total = len(chats.load_all(OUT))
+    note = f", {skipped} still running" if skipped else ""
+    print(f"Chats: {saved} new or updated, {total} kept in total{note}.")
+    pagegen.build(OUT)
+    return 0
+
+
 def cmd_run(args) -> int:
     repo = Path(args.repo).resolve()
     if not (repo / ".git").exists():
@@ -209,11 +324,15 @@ def cmd_run(args) -> int:
                   f"{len(sess.transcript)} chars transcript, {len(sess.diff)} chars diff")
             done += 1
             continue
+        chats.save(OUT, sess)
         result = extract(sess.transcript, sess.diff, sources.git_log(repo), model_name=args.model)
         print(f"  {cid[:18]} — {len(result.get('claims', []))} claims, "
               f"{len(result.get('corrections', []))} corrections -> {_write(sess, result, _slug(sess)).name}")
         _mark(sess)
         done += 1
+
+    if not args.dry_run and OUT.exists():
+        pagegen.build(OUT)
 
     if done and args.dry_run:
         print(f"\n{done} session(s) would be sent, {skipped} skipped without spending.")
@@ -223,6 +342,25 @@ def cmd_run(args) -> int:
     else:
         print(f"\nNothing worth extracting. {skipped} session(s) skipped, no API calls made.\n"
               f"What people asked for is still recorded in out/asks.jsonl.")
+    return 0
+
+
+def cmd_weekly(args) -> int:
+    """The deliberate pass: summarise what actually got committed this week."""
+    args.source, args.working, args.force = "both", False, False
+    args.dry_run, args.ended, args.min_words = False, None, 3
+    repo = Path(args.repo).resolve()
+    cutoff = {s.session_id for s in _gather(repo, args.since, "both") if s.commits}
+    if not cutoff:
+        print(f"Nothing committed in the last {args.since}. Chats are still kept.")
+        return 0
+    print(f"{len(cutoff)} session(s) with commits in the last {args.since}.")
+    return cmd_run(args)
+
+
+def cmd_page(_args) -> int:
+    p = pagegen.build(OUT)
+    print(f"Wrote {p}")
     return 0
 
 
@@ -256,6 +394,23 @@ def main() -> int:
                    help="skip sessions where nothing changed and fewer words were typed (default 3)")
     r.add_argument("--dry-run", action="store_true", help="show what would be sent, call nothing")
     r.set_defaults(fn=cmd_run)
+
+    c = sub.add_parser("capture", help="keep every conversation (free, no model call)")
+    c.add_argument("--repo", required=True)
+    c.add_argument("--since", default="30d")
+    c.add_argument("--ended", default=None,
+                   help="session id the hook says just finished")
+    c.set_defaults(fn=cmd_capture)
+
+    w = sub.add_parser("weekly", help="summarise the last week's committed work")
+    w.add_argument("--repo", required=True)
+    w.add_argument("--since", default="7d")
+    w.add_argument("--model", default=None)
+    w.add_argument("--committed-only", action="store_true", default=True)
+    w.set_defaults(fn=cmd_weekly)
+
+    g = sub.add_parser("page", help="rebuild out/index.html from what is already there")
+    g.set_defaults(fn=cmd_page)
 
     m = sub.add_parser("models", help="list models your key can use")
     m.set_defaults(fn=cmd_models)

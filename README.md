@@ -11,33 +11,38 @@ plus a growing file of typed claims.
     cp .env.example .env        # paste your OpenAI key
     uv venv --python 3.12 && uv pip install -r requirements.txt
 
+## Two separate things
+
+**Chats are always kept.** Free, no model call, every session. `harvest capture` runs
+from a Codex hook on every session start and end. This is not optional and never
+depends on committing.
+
+**Summarising is deliberate.** On demand, or weekly:
+
+    python -m harvest capture --repo ../Cumulate     # keep chats (free, automatic)
+    python -m harvest run     --repo ../Cumulate     # summarise now
+    python -m harvest weekly  --repo ../Cumulate     # summarise the week's committed work
+    python -m harvest page                           # rebuild the HTML
+
 ## Where sessions come from
 
-Two sources, both read by default:
+Two sources, **merged** — they are complementary, not redundant:
 
-- **Entire checkpoints** — richer: transcript plus the diff and the commit it produced.
-  Only exists if the session committed.
-- **Codex's own store** (`~/.codex/thread_history_*.sqlite`) — every session, committed
-  or not, filtered to the ones whose commands ran inside the target repo.
+- **Entire checkpoints** — the commit and the diff
+- **Codex's own store** (`~/.codex/thread_history_*.sqlite`) — the structured turns:
+  prompts, responses, tool calls, reasoning
 
-So a conversation is never lost just because the agent didn't commit, and nothing has
-to be copied into your repo to achieve that. Codex's database is opened **read-only**.
+Entire gets its transcript the same way: its hooks read Codex's own store and render
+it back as `[User]` / `[Assistant]` / `[Tool]`. Taking one source and discarding the
+other loses half of every session.
 
-When both sources have the same session, the Entire one wins — it has the diff.
+## Browsing it
 
-    --source both     # default
-    --source entire   # checkpoints only
-    --source codex    # Codex store only
+    open out/index.html
 
-## Use
-
-    python -m harvest run --repo ../Cumulate          # new sessions since last run
-    python -m harvest run --repo ../Cumulate --since 7d
-    python -m harvest run --repo ../Cumulate --dry-run  # show what would be sent
-    python -m harvest run --repo ../Cumulate --working  # uncommitted work, no checkpoint
-    python -m harvest models                           # what your key can use
-
-Already-processed checkpoints are skipped. `--force` reprocesses them.
+One self-contained dark page. Sessions render as the conversation actually happened —
+prompts, responses, collapsed tool calls — with filters and counts down the side.
+Sessions not yet summarised are marked with a dot; their chat is still there in full.
 
 ## Spending
 

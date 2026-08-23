@@ -28,6 +28,7 @@ class Session:
     diff: str = ""
     commits: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
+    turns: list[dict] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
