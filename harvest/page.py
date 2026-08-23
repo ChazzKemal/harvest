@@ -116,6 +116,21 @@ details.steps>summary:hover{border-color:#33333a}
 .step .out{font-family:var(--mono);font-size:11.5px;color:var(--dim);white-space:pre-wrap;
     margin-top:6px;max-height:160px;overflow:auto}
 .think{color:var(--dim);font-size:13px;font-style:italic;padding:2px 0 6px}
+
+/* knowledge grouped by tool */
+details.tool{border:1px solid var(--line);border-radius:10px;margin-bottom:12px;background:var(--panel)}
+details.tool>summary{padding:13px 16px;cursor:pointer;list-style:none;display:flex;
+  align-items:center;gap:12px;border-radius:10px}
+details.tool>summary::-webkit-details-marker{display:none}
+details.tool>summary:before{content:"▸";color:var(--dim);font-size:11px;transition:transform .12s}
+details.tool[open]>summary:before{transform:rotate(90deg)}
+details.tool>summary:hover{background:var(--raised)}
+.tname{font-weight:600;font-family:var(--mono);font-size:13px;color:var(--accent)}
+.tcount{margin-left:auto;color:var(--dim);font-size:12px}
+.tbody{padding:2px 16px 14px;border-top:1px solid var(--line)}
+h3.sub{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+  font-weight:600;margin:16px 0 9px}
+.tbody .card{background:var(--raised)}
 """
 
 JS = """
@@ -154,6 +169,11 @@ function filter(){
     const ok=types.includes(c.dataset.type)&&confs.includes(c.dataset.conf)
              &&(!gen||c.dataset.gen==='1');
     c.classList.toggle('hide',!ok); if(ok)n++;
+  });
+  $$('#view-knowledge h3.sub').forEach(h=>{
+    let n=h.nextElementSibling, any=false;
+    while(n&&n.classList.contains('card')){ if(!n.classList.contains('hide')) any=true; n=n.nextElementSibling; }
+    h.classList.toggle('hide',!any);
   });
   $$('#view-knowledge .grp').forEach(g=>
     g.classList.toggle('hide', !g.querySelectorAll('.card:not(.hide)').length));
@@ -222,6 +242,19 @@ def build(out_dir: Path) -> Path:
 
     claims = _jsonl(out_dir / "claims.jsonl")
     asks = _jsonl(out_dir / "asks.jsonl")
+
+    # Claims written before the tool field existed: recover it from the session's
+    # own file list rather than re-running extraction.
+    tool_by_session = {}
+    for c in chatstore.load_all(out_dir):
+        for f in c.get("files", []):
+            parts = f.split("/")
+            if len(parts) >= 2 and parts[0] == "tools":
+                tool_by_session[c.get("session_id")] = parts[1]
+                break
+    for c in claims:
+        if not c.get("tool"):
+            c["tool"] = tool_by_session.get(c.get("session"), "")
 
     # Summaries by session id, when one has been made. Chats exist regardless.
     summaries: dict[str, dict] = {}
@@ -432,33 +465,49 @@ def _knowledge_view(claims: list[dict]) -> str:
         return ('<div class="view hide" id="view-knowledge" data-title="Knowledge">'
                 '<div class="wrap"><h1>Knowledge</h1>'
                 '<div class="empty">Nothing harvested yet.</div></div></div>')
-    groups = []
-    for kind, label in TYPE_LABELS.items():
-        rows = [c for c in claims if c["type"] == kind]
-        if not rows:
-            continue
-        cards = []
-        for c in rows:
-            gen = c.get("generalises")
-            tags = f'<span class="tag {c.get("confidence","")}">{c.get("confidence","")}</span>'
-            if not gen:
-                tags += '<span class="tag scoped">this file only</span>'
-            tags += f'<span class="tag">{html.escape(c.get("date",""))}</span>'
-            why = (f'<div class="why"><b>Why:</b> {_inline(c["why"])}</div>'
-                   if c.get("why") else "")
-            cards.append(
-                f'<div class="card" data-type="{kind}" data-conf="{c.get("confidence","")}"'
-                f' data-gen="{1 if gen else 0}">'
-                f'<div class="claim">{_inline(c["claim"])}</div>'
-                f'<div class="tags">{tags}</div>{why}'
-                f'<div class="quote">{_inline(c.get("evidence","").strip())}</div></div>')
-        groups.append(f'<div class="grp"><h2>{label}</h2>{"".join(cards)}</div>')
+
+    by_tool: dict[str, list[dict]] = {}
+    for c in claims:
+        by_tool.setdefault(c.get("tool") or "", []).append(c)
+
+    blocks = []
+    for tool in sorted(by_tool, key=lambda x: (x == "", x)):
+        rows = by_tool[tool]
+        label = tool or "Not tied to a tool"
+        gen = sum(1 for c in rows if c.get("generalises"))
+        inner = []
+        for kind, kind_label in TYPE_LABELS.items():
+            group = [c for c in rows if c["type"] == kind]
+            if not group:
+                continue
+            inner.append(f'<h3 class="sub">{kind_label}</h3>' + "".join(_card(c) for c in group))
+        blocks.append(
+            f'<details class="tool grp" open><summary>'
+            f'<span class="tname">{html.escape(label)}</span>'
+            f'<span class="tcount">{len(rows)} claim{"s" if len(rows) != 1 else ""}'
+            f'{f" · {gen} generalise" if gen else ""}</span>'
+            f'</summary><div class="tbody">{"".join(inner)}</div></details>')
 
     return ('<div class="view hide" id="view-knowledge" data-title="Knowledge">'
             '<div class="wrap"><h1>Knowledge</h1>'
             f'<div class="meta"><span id="shown">{len(claims)}</span>'
-            f'<span>of {len(claims)} claims</span></div>'
-            f'{"".join(groups)}</div></div>')
+            f'<span>of {len(claims)} claims</span>'
+            f'<span class="sep">·</span><span>{len(by_tool)} tools</span></div>'
+            f'{"".join(blocks)}</div></div>')
+
+
+def _card(c: dict) -> str:
+    gen = c.get("generalises")
+    tags = f'<span class="tag {c.get("confidence","")}">{c.get("confidence","")}</span>'
+    if not gen:
+        tags += '<span class="tag scoped">this file only</span>'
+    tags += f'<span class="tag">{html.escape(c.get("date",""))}</span>'
+    why = f'<div class="why"><b>Why:</b> {_inline(c["why"])}</div>' if c.get("why") else ""
+    return (f'<div class="card" data-type="{c["type"]}" data-conf="{c.get("confidence","")}"'
+            f' data-gen="{1 if gen else 0}">'
+            f'<div class="claim">{_inline(c["claim"])}</div>'
+            f'<div class="tags">{tags}</div>{why}'
+            f'<div class="quote">{_inline(c.get("evidence","").strip())}</div></div>')
 
 
 def _asks_view(asks: list[dict]) -> str:

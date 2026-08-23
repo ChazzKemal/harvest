@@ -68,6 +68,10 @@ and that index tells you what people actually want built. It costs nothing.
 
     ./view.command        # or: ./.venv/bin/streamlit run harvest/viewer.py
 
+Knowledge is grouped by the tool it came from — each tool a collapsible group —
+so you can see what is known about `shipment-cost` without wading through everything
+else. Filters still apply across all of them.
+
 Three tabs: **Knowledge** (every claim, filterable by type, confidence, and whether it
 generalises), **Sessions** (the full report per session), and **What people asked for**
 (every request, extracted or not — this is your roadmap signal).

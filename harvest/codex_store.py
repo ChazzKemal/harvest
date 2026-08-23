@@ -42,7 +42,8 @@ def _connect(db: Path) -> sqlite3.Connection:
 
 def sessions_for(repo: Path, since_days: int = 30) -> list[Session]:
     """Every Codex session whose commands ran inside `repo`."""
-    repo = str(Path(repo).resolve())
+    repo = Path(repo).resolve()
+    repo_s = str(repo)
     cutoff = int((datetime.now(timezone.utc) - timedelta(days=since_days)).timestamp() * 1000)
     out: list[Session] = []
 
@@ -68,7 +69,7 @@ def sessions_for(repo: Path, since_days: int = 30) -> list[Session]:
                     d = json.loads(js)
                 except json.JSONDecodeError:
                     continue
-                if itype == "commandExecution" and d.get("cwd", "").startswith(repo):
+                if itype == "commandExecution" and d.get("cwd", "").startswith(repo_s):
                     in_repo = True
                 parsed.append((itype, d, ms))
 
@@ -103,10 +104,19 @@ def sessions_for(repo: Path, since_days: int = 30) -> list[Session]:
                 elif itype == "reasoning":
                     s.turns.append({"role": "reasoning", "text": _text(d).strip()[:2000], "ts": ts})
                 elif itype == "fileChange":
-                    paths = d.get("paths", []) or ([d["path"]] if d.get("path") else [])
-                    for fp in paths:
-                        if fp not in s.files:
-                            s.files.append(fp)
+                    # Shape is changes:[{path, kind, diff}] with absolute paths.
+                    paths = []
+                    for ch in d.get("changes", []) or []:
+                        raw = ch.get("path") if isinstance(ch, dict) else None
+                        if not raw:
+                            continue
+                        try:
+                            rel = str(Path(raw).relative_to(repo))
+                        except ValueError:
+                            rel = raw
+                        paths.append(rel)
+                        if rel not in s.files:
+                            s.files.append(rel)
                     s.turns.append({"role": "tool", "kind": "edit",
                                     "text": ", ".join(paths), "ts": ts})
 

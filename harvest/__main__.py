@@ -103,6 +103,15 @@ def _log_asks(sess, decision) -> None:
         }) + "\n")
 
 
+def _tool_of(sess) -> str:
+    """Which tool this session worked on, from the paths it touched."""
+    for f in sess.files:
+        parts = Path(f).parts
+        if len(parts) >= 2 and parts[0] == "tools":
+            return parts[1]
+    return ""
+
+
 def _slug(sess) -> str:
     """A filename that is unique per session and legal on every platform."""
     raw = sess.session_id or sess.checkpoint_id
@@ -128,6 +137,7 @@ def _write(sess, result: dict, label: str) -> Path:
         for c in result.get("claims", []):
             f.write(json.dumps({**c, "session": key,
                                 "checkpoint": sess.checkpoint_id,
+                                "tool": _tool_of(sess),
                                 "agent": sess.agent, "date": stamp}) + "\n")
     return path
 
