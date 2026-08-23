@@ -21,6 +21,27 @@ plus a growing file of typed claims.
 
 Already-processed checkpoints are skipped. `--force` reprocesses them.
 
+## Spending
+
+Sessions are gated before any API call, deterministically — no model decides this.
+
+The signal is **how much the engineer typed**, not how big the diff is. A large diff
+with no conversation is the agent doing mechanical work and carries no domain
+knowledge; a one-line diff after a long back-and-forth is exactly what we want.
+
+Skipped for free:
+
+- launcher prompts only — nobody actually said anything
+- under 15 words from the engineer (`--min-words` to change)
+- no changes and only a brief exchange
+
+`--force` ignores the gate. `--dry-run` shows the verdict per session without calling
+anything.
+
+**Skipped sessions are still recorded.** Every real thing a person asked for is
+appended to `out/asks.jsonl` regardless — a working one-shot is still a complete spec,
+and that index tells you what people actually want built. It costs nothing.
+
 ## Output
 
     out/sessions/2026-08-23-a1b2c3d4e5f6.md   one readable page per session

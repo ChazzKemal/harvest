@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import sources
 from .extract import extract
+from .gate import assess, human_turns
 from .render import to_markdown
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +41,28 @@ def _mark(cid: str) -> None:
     OUT.mkdir(exist_ok=True)
     with (OUT / ".processed").open("a") as f:
         f.write(cid + "\n")
+
+
+def _log_asks(sess, decision) -> None:
+    """Every real thing a person asked for, recorded for nothing.
+
+    A one-shot that works is still a complete spec — worth keeping even when there
+    is no back-and-forth to extract. Costs no API call.
+    """
+    turns = human_turns(sess)
+    if not turns:
+        return
+    OUT.mkdir(exist_ok=True)
+    with (OUT / "asks.jsonl").open("a") as f:
+        f.write(json.dumps({
+            "checkpoint": sess.checkpoint_id,
+            "session": sess.session_id,
+            "date": (sess.started_at or datetime.now(timezone.utc).isoformat())[:10],
+            "asks": turns,
+            "files": sess.files,
+            "extracted": decision.run,
+            "words": decision.human_words,
+        }) + "\n")
 
 
 def _write(sess, result: dict, label: str) -> Path:
@@ -69,6 +92,10 @@ def cmd_run(args) -> int:
             return 0
         sess = sources.Session(checkpoint_id="working", agent="(uncommitted)")
         sess.diff, sess.transcript = diff, "(no transcript — uncommitted working tree)"
+        d = assess(sess, min_words=args.min_words)
+        if not d.run and not args.force:
+            print(f"Skipped without spending: {d}")
+            return 0
         if args.dry_run:
             print(f"Would send {len(diff)} chars of diff, no transcript.")
             return 0
@@ -83,7 +110,7 @@ def cmd_run(args) -> int:
               "edits nothing leaves no trace. Use --working to summarise uncommitted work.")
         return 0
 
-    seen, done = _seen(), 0
+    seen, done, skipped = _seen(), 0, 0
     for cp in cps:
         cid = cp.get("id") or cp.get("checkpoint_id") or ""
         if not cid or (cid in seen and not args.force):
@@ -91,10 +118,21 @@ def cmd_run(args) -> int:
         sess = sources.load(repo, cid)
         if sess.is_empty:
             print(f"  {cid[:12]} — empty, skipped")
+            _mark(cid)
+            skipped += 1
             continue
+
+        d = assess(sess, min_words=args.min_words)
+        _log_asks(sess, d)
+        if not d.run and not args.force:
+            print(f"  {cid[:12]} — skipped: {d}")
+            _mark(cid)
+            skipped += 1
+            continue
+
         if args.dry_run:
-            print(f"  {cid[:12]} — would send {len(sess.transcript)} chars transcript, "
-                  f"{len(sess.diff)} chars diff")
+            print(f"  {cid[:12]} — would send: {d}, "
+                  f"{len(sess.transcript)} chars transcript, {len(sess.diff)} chars diff")
             continue
         result = extract(sess.transcript, sess.diff, sources.git_log(repo), model_name=args.model)
         print(f"  {cid[:12]} — {len(result.get('claims', []))} claims, "
@@ -102,7 +140,12 @@ def cmd_run(args) -> int:
         _mark(cid)
         done += 1
 
-    print(f"\n{done} session(s) processed. Claims appended to out/claims.jsonl")
+    if done:
+        print(f"\n{done} session(s) processed, {skipped} skipped without spending. "
+              f"Claims appended to out/claims.jsonl")
+    else:
+        print(f"\nNothing worth extracting. {skipped} session(s) skipped, no API calls made.\n"
+              f"What people asked for is still recorded in out/asks.jsonl.")
     return 0
 
 
@@ -126,7 +169,10 @@ def main() -> int:
     r.add_argument("--since", default="30d", help="time window (default 30d)")
     r.add_argument("--model", default=None, help="override OPENAI_MODEL")
     r.add_argument("--working", action="store_true", help="summarise uncommitted changes instead")
-    r.add_argument("--force", action="store_true", help="reprocess already-seen checkpoints")
+    r.add_argument("--force", action="store_true",
+                   help="reprocess already-seen checkpoints and ignore the spend gate")
+    r.add_argument("--min-words", type=int, default=15,
+                   help="skip sessions where the engineer typed fewer words (default 15)")
     r.add_argument("--dry-run", action="store_true", help="show what would be sent, call nothing")
     r.set_defaults(fn=cmd_run)
 
