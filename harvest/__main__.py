@@ -171,8 +171,8 @@ def main() -> int:
     r.add_argument("--working", action="store_true", help="summarise uncommitted changes instead")
     r.add_argument("--force", action="store_true",
                    help="reprocess already-seen checkpoints and ignore the spend gate")
-    r.add_argument("--min-words", type=int, default=15,
-                   help="skip sessions where the engineer typed fewer words (default 15)")
+    r.add_argument("--min-words", type=int, default=3,
+                   help="skip sessions where nothing changed and fewer words were typed (default 3)")
     r.add_argument("--dry-run", action="store_true", help="show what would be sent, call nothing")
     r.set_defaults(fn=cmd_run)
 

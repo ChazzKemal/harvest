@@ -25,15 +25,14 @@ Already-processed checkpoints are skipped. `--force` reprocesses them.
 
 Sessions are gated before any API call, deterministically — no model decides this.
 
-The signal is **how much the engineer typed**, not how big the diff is. A large diff
-with no conversation is the agent doing mechanical work and carries no domain
-knowledge; a one-line diff after a long back-and-forth is exactly what we want.
+**Anything that produced changes is always recorded**, however few words it took to
+ask for it. "refactor it" counts. The gate exists only to avoid paying to be told that
+an empty session was empty.
 
-Skipped for free:
+Skipped for free — and only these:
 
-- launcher prompts only — nobody actually said anything
-- under 15 words from the engineer (`--min-words` to change)
-- no changes and only a brief exchange
+- launcher prompts only, nothing changed — nobody actually said anything
+- "yes" / "ok thanks" with nothing changed (under 3 words, `--min-words` to change)
 
 `--force` ignores the gate. `--dry-run` shows the verdict per session without calling
 anything.

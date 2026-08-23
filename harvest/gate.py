@@ -27,8 +27,10 @@ BOILERPLATE = (
     "the inbox is gitignored",
 )
 
-MIN_HUMAN_WORDS = 15   # below this, nobody said anything of substance
-MIN_HUMAN_TURNS = 1
+# Deliberately low. This only filters "yes" / "ok thanks" — anything that reads like
+# a real instruction gets recorded. Work that produced changes is always recorded,
+# however few words it took to ask for it.
+MIN_HUMAN_WORDS = 3
 
 
 @dataclass
@@ -68,19 +70,20 @@ def fingerprint(sess) -> str:
 
 
 def assess(sess, *, min_words: int = MIN_HUMAN_WORDS) -> Decision:
+    """Skip only genuinely empty sessions. When in doubt, record it."""
     turns = human_turns(sess)
     words = sum(len(t.split()) for t in turns)
+    changed = bool((sess.diff or "").strip()) or bool(sess.files)
+
+    # Something was actually built or changed — always worth recording, however
+    # briefly it was asked for. "refactor it" counts.
+    if changed and turns:
+        return Decision(True, "work was done", words, len(turns))
 
     if not turns:
         return Decision(False, "nobody typed anything", words, 0)
 
-    if len(turns) < MIN_HUMAN_TURNS:
-        return Decision(False, "no human turns", words, len(turns))
-
-    if words < min_words:
-        return Decision(False, f"under {min_words} words from the engineer", words, len(turns))
-
-    if not (sess.diff or "").strip() and words < min_words * 3:
-        return Decision(False, "no changes and only a brief exchange", words, len(turns))
+    if not changed and words < min_words:
+        return Decision(False, "nothing said, nothing changed", words, len(turns))
 
     return Decision(True, "worth reading", words, len(turns))
