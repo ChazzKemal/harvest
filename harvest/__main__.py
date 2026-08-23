@@ -32,15 +32,52 @@ def _load_env() -> None:
                 os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
 
 
-def _seen() -> set[str]:
+def _state(sess) -> str:
+    """A session reported from a commit beats one reported mid-flight."""
+    return "committed" if sess.commits else "temp"
+
+
+def _seen() -> dict[str, str]:
+    """session_id -> best state already reported.
+
+    Keyed by session, not checkpoint: checkpoint IDs change when temporary
+    checkpoints are consolidated on commit, so keying on them would re-report
+    the same conversation under a new id.
+    """
     f = OUT / ".processed"
-    return set(f.read_text().split()) if f.exists() else set()
+    if not f.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in f.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("{"):
+            try:
+                d = json.loads(line)
+                out[d["session"]] = d.get("state", "temp")
+            except (json.JSONDecodeError, KeyError):
+                continue
+        else:
+            out[line] = "temp"   # legacy entries
+    return out
 
 
-def _mark(cid: str) -> None:
+def _mark(sess) -> None:
     OUT.mkdir(exist_ok=True)
+    key = sess.session_id or sess.checkpoint_id
     with (OUT / ".processed").open("a") as f:
-        f.write(cid + "\n")
+        f.write(json.dumps({"session": key, "state": _state(sess),
+                            "checkpoint": sess.checkpoint_id}) + "\n")
+
+
+def _already_done(sess, seen: dict[str, str]) -> bool:
+    key = sess.session_id or sess.checkpoint_id
+    prev = seen.get(key)
+    if prev is None:
+        return False
+    # Re-report once a session gains a commit — the diff makes a better report.
+    return not (prev == "temp" and _state(sess) == "committed")
 
 
 def _log_asks(sess, decision) -> None:
@@ -136,11 +173,11 @@ def cmd_run(args) -> int:
     seen, done, skipped = _seen(), 0, 0
     for sess in candidates:
         cid = sess.checkpoint_id
-        if not cid or (cid in seen and not args.force):
+        if _already_done(sess, seen) and not args.force:
             continue
         if sess.is_empty:
             print(f"  {cid[:12]} — empty, skipped")
-            _mark(cid)
+            _mark(sess)
             skipped += 1
             continue
 
@@ -148,21 +185,24 @@ def cmd_run(args) -> int:
         _log_asks(sess, d)
         if not d.run and not args.force:
             print(f"  {cid[:12]} — skipped: {d}")
-            _mark(cid)
+            _mark(sess)
             skipped += 1
             continue
 
         if args.dry_run:
             print(f"  {cid[:12]} — would send: {d}, "
                   f"{len(sess.transcript)} chars transcript, {len(sess.diff)} chars diff")
+            done += 1
             continue
         result = extract(sess.transcript, sess.diff, sources.git_log(repo), model_name=args.model)
         print(f"  {cid[:18]} — {len(result.get('claims', []))} claims, "
               f"{len(result.get('corrections', []))} corrections -> {_write(sess, result, _slug(sess)).name}")
-        _mark(cid)
+        _mark(sess)
         done += 1
 
-    if done:
+    if done and args.dry_run:
+        print(f"\n{done} session(s) would be sent, {skipped} skipped without spending.")
+    elif done:
         print(f"\n{done} session(s) processed, {skipped} skipped without spending. "
               f"Claims appended to out/claims.jsonl")
     else:

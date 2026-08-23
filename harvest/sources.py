@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,16 +35,26 @@ class Session:
 
 
 def checkpoints(repo: Path, since: str = "30d") -> list[dict]:
-    """Checkpoints on the current branch. These are the durable record."""
+    """Checkpoints on the current branch. These are the durable record.
+
+    `checkpoint list` has no --since flag, and passing one exits 0 printing usage
+    text rather than failing — so filter by date here instead.
+    """
     try:
-        raw = _run(["entire", "checkpoint", "list", "--json", "--since", since], cwd=repo)
-    except RuntimeError:
         raw = _run(["entire", "checkpoint", "list", "--json"], cwd=repo)
+    except RuntimeError:
+        return []
+
     try:
         data = json.loads(raw or "[]")
     except json.JSONDecodeError:
         return []
-    return data if isinstance(data, list) else data.get("checkpoints", [])
+
+    cps = data if isinstance(data, list) else data.get("checkpoints", [])
+
+    days = int("".join(c for c in since if c.isdigit()) or 30)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return [c for c in cps if not c.get("date") or c["date"] >= cutoff[:10]]
 
 
 def _parse_transcript(text: str) -> list[str]:
