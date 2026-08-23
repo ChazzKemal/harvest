@@ -11,6 +11,24 @@ plus a growing file of typed claims.
     cp .env.example .env        # paste your OpenAI key
     uv venv --python 3.12 && uv pip install -r requirements.txt
 
+## Where sessions come from
+
+Two sources, both read by default:
+
+- **Entire checkpoints** — richer: transcript plus the diff and the commit it produced.
+  Only exists if the session committed.
+- **Codex's own store** (`~/.codex/thread_history_*.sqlite`) — every session, committed
+  or not, filtered to the ones whose commands ran inside the target repo.
+
+So a conversation is never lost just because the agent didn't commit, and nothing has
+to be copied into your repo to achieve that. Codex's database is opened **read-only**.
+
+When both sources have the same session, the Entire one wins — it has the diff.
+
+    --source both     # default
+    --source entire   # checkpoints only
+    --source codex    # Codex store only
+
 ## Use
 
     python -m harvest run --repo ../Cumulate          # new sessions since last run

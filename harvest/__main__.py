@@ -13,7 +13,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import sources
+from . import codex_store, sources
 from .extract import extract
 from .gate import assess, human_turns
 from .render import to_markdown
@@ -65,6 +65,13 @@ def _log_asks(sess, decision) -> None:
         }) + "\n")
 
 
+def _slug(sess) -> str:
+    """A filename that is unique per session and legal on every platform."""
+    raw = sess.session_id or sess.checkpoint_id
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in raw)
+    return safe.strip("-")[:24] or "session"
+
+
 def _write(sess, result: dict, label: str) -> Path:
     (OUT / "sessions").mkdir(parents=True, exist_ok=True)
     stamp = (sess.started_at or datetime.now(timezone.utc).isoformat())[:10]
@@ -103,19 +110,38 @@ def cmd_run(args) -> int:
         print(f"Wrote {_write(sess, result, 'working')}")
         return 0
 
-    cps = sources.checkpoints(repo, args.since)
-    if not cps:
-        print("No checkpoints found.\n"
-              "Entire only records a session once it saves changes — a conversation that\n"
-              "edits nothing leaves no trace. Use --working to summarise uncommitted work.")
+    candidates: list = []
+    seen_sessions: set[str] = set()
+
+    if args.source in ("entire", "both"):
+        for cp in sources.checkpoints(repo, args.since):
+            cid = cp.get("id") or cp.get("checkpoint_id") or ""
+            if not cid:
+                continue
+            s = sources.load(repo, cid)
+            candidates.append(s)
+            if s.session_id:
+                seen_sessions.add(s.session_id)
+
+    if args.source in ("codex", "both"):
+        days = int("".join(c for c in args.since if c.isdigit()) or 30)
+        for s in codex_store.sessions_for(repo, days):
+            # An Entire checkpoint for the same session is richer — it has the diff.
+            if s.session_id in seen_sessions:
+                continue
+            candidates.append(s)
+
+    if not candidates:
+        print("No sessions found.\n"
+              "Entire records a session only once it commits; Codex keeps the rest in its\n"
+              "own store. Neither had anything for this repo.")
         return 0
 
     seen, done, skipped = _seen(), 0, 0
-    for cp in cps:
-        cid = cp.get("id") or cp.get("checkpoint_id") or ""
+    for sess in candidates:
+        cid = sess.checkpoint_id
         if not cid or (cid in seen and not args.force):
             continue
-        sess = sources.load(repo, cid)
         if sess.is_empty:
             print(f"  {cid[:12]} — empty, skipped")
             _mark(cid)
@@ -135,8 +161,8 @@ def cmd_run(args) -> int:
                   f"{len(sess.transcript)} chars transcript, {len(sess.diff)} chars diff")
             continue
         result = extract(sess.transcript, sess.diff, sources.git_log(repo), model_name=args.model)
-        print(f"  {cid[:12]} — {len(result.get('claims', []))} claims, "
-              f"{len(result.get('corrections', []))} corrections -> {_write(sess, result, cid[:12]).name}")
+        print(f"  {cid[:18]} — {len(result.get('claims', []))} claims, "
+              f"{len(result.get('corrections', []))} corrections -> {_write(sess, result, _slug(sess)).name}")
         _mark(cid)
         done += 1
 
@@ -168,6 +194,8 @@ def main() -> int:
     r.add_argument("--repo", required=True, help="path to the repo Entire is enabled in")
     r.add_argument("--since", default="30d", help="time window (default 30d)")
     r.add_argument("--model", default=None, help="override OPENAI_MODEL")
+    r.add_argument("--source", choices=["entire", "codex", "both"], default="both",
+                   help="where to read sessions from (default both)")
     r.add_argument("--working", action="store_true", help="summarise uncommitted changes instead")
     r.add_argument("--force", action="store_true",
                    help="reprocess already-seen checkpoints and ignore the spend gate")
