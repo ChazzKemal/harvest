@@ -10,6 +10,19 @@ import json
 from pathlib import Path
 
 
+def _duration(turns: list[dict]) -> int:
+    """Wall-clock from the first turn to the last."""
+    stamps = sorted(t["ts"] for t in turns if t.get("ts"))
+    if len(stamps) < 2:
+        return 0
+    from datetime import datetime
+    try:
+        return int((datetime.fromisoformat(stamps[-1])
+                    - datetime.fromisoformat(stamps[0])).total_seconds())
+    except ValueError:
+        return 0
+
+
 def dir_for(out: Path) -> Path:
     d = out / "chats"
     d.mkdir(parents=True, exist_ok=True)
@@ -29,6 +42,12 @@ def save(out: Path, sess) -> tuple[Path, bool]:
         "commits": sess.commits,
         "prompts": sess.prompts,
         "turns": sess.turns,
+        "tokens": sess.tokens,
+        "author": sess.author,
+        "checkpoints": sess.checkpoint_count,
+        "added": sess.added,
+        "removed": sess.removed,
+        "duration_s": _duration(sess.turns),
         "transcript": sess.transcript,
     }
     new = json.dumps(payload, indent=1, ensure_ascii=False)

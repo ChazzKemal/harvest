@@ -169,6 +169,11 @@ def _merge(found: list) -> list:
         prev.started_at = min(x for x in (prev.started_at, s.started_at) if x) \
             if (prev.started_at and s.started_at) else (prev.started_at or s.started_at)
         prev.files = sorted(set(prev.files) | set(s.files))
+        prev.tokens = prev.tokens or s.tokens
+        prev.author = prev.author or s.author
+        prev.checkpoint_count = prev.checkpoint_count or s.checkpoint_count
+        prev.added = prev.added or s.added
+        prev.removed = prev.removed or s.removed
         # Entire's checkpoint id is the durable one; keep it over "codex:..."
         if s.checkpoint_id and not s.checkpoint_id.startswith("codex:"):
             prev.checkpoint_id = s.checkpoint_id

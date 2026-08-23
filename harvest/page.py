@@ -262,13 +262,29 @@ def build(out_dir: Path) -> Path:
     views = [_knowledge_view(claims), _asks_view(asks)]
     for i, s in enumerate(sessions):
         c, n = s["chat"], s["counts"]
+        tok = c.get("tokens") or {}
+        added, removed = c.get("added", 0), c.get("removed", 0)
         chips = [f'<span class="badge">{html.escape(c.get("agent") or "Agent")}</span>']
-        for bit in (c.get("model"), _ago(c.get("started_at", "")),
-                    f'{n["prompts"]} prompts', f'{n["tools"]} tool calls',
-                    f'{len(c.get("files", []))} files',
+        cp = c.get("checkpoints", 0)
+        for bit in (c.get("model"), c.get("author"), _ago(c.get("started_at", "")),
+                    _dur(c.get("duration_s", 0)),
+                    f'{cp} checkpoint{"s" if cp != 1 else ""}' if cp else "",
+                    f'{n["prompts"]} prompts',
+                    f'{n["tools"]} tool calls',
+                    f'{len(c.get("files", []))} file changes' if c.get("files") else "",
                     "committed" if c.get("commits") else "not committed"):
             if bit:
                 chips.append(f'<span class="sep">·</span><span>{html.escape(str(bit))}</span>')
+        if added or removed:
+            chips.append('<span class="sep">·</span>'
+                         f'<span class="pos">+{added}</span>'
+                         f'<span class="sep" style="margin:0 3px">/</span>'
+                         f'<span class="neg">−{removed}</span>')
+        if tok.get("total"):
+            chips.append(f'<span class="sep">·</span><span>{_tok(tok["total"])}</span>')
+            if tok.get("api_calls"):
+                chips.append('<span class="sep">·</span>'
+                             f'<span>{tok["api_calls"]} API calls</span>')
 
         summary = (f'<h2>Summary</h2><div class="md">{_md(s["summary"])}</div>'
                    if s["summary"] else
@@ -331,6 +347,26 @@ def build(out_dir: Path) -> Path:
     path = out_dir / "index.html"
     path.write_text(page, encoding="utf-8")
     return path
+
+
+def _dur(sec: int) -> str:
+    if not sec:
+        return ""
+    if sec < 60:
+        return f"{sec}s"
+    if sec < 3600:
+        return f"{sec // 60}m"
+    return f"{sec // 3600}hr {(sec % 3600) // 60}min"
+
+
+def _tok(n: int) -> str:
+    if not n:
+        return ""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M tokens"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K tokens"
+    return f"{n} tokens"
 
 
 def _ago(iso: str) -> str:

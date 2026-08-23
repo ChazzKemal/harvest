@@ -29,6 +29,11 @@ class Session:
     commits: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=list)
     turns: list[dict] = field(default_factory=list)
+    tokens: dict = field(default_factory=dict)
+    author: str = ""
+    checkpoint_count: int = 0
+    added: int = 0
+    removed: int = 0
 
     @property
     def is_empty(self) -> bool:
@@ -93,32 +98,71 @@ def sessions(repo: Path, since: str = "30d") -> list[Session]:
         if turns := _parse_transcript(s.transcript):
             s.prompts = turns + [p for p in s.prompts if p not in turns]
 
+        # `checkpoint list --json` carries no commit field. `explain` does, either
+        # as a "commits  <sha> <subject>" header or as "(<sha>)" in a list line.
         s.commits = [c.get("commit", "") for c in cps if c.get("commit")]
-        if s.commits:
-            try:
-                s.diff = _run(["git", "show", "--stat", "--patch", s.commits[-1]], cwd=repo)[:60_000]
-            except RuntimeError:
-                pass
-        else:
-            # Not committed yet. Include untracked files too — `git diff` ignores
-            # them, and a brand-new tool is entirely untracked.
-            try:
-                s.diff = _run(["git", "diff", "HEAD"], cwd=repo)
-                new = _run(["git", "ls-files", "--others", "--exclude-standard"], cwd=repo)
-                for f in [x for x in new.splitlines() if x.strip()][:20]:
-                    body = (repo / f).read_text(errors="replace")[:8_000] \
-                        if (repo / f).is_file() else ""
-                    s.diff += f"\n\n--- new file: {f} ---\n{body}"
-                    s.files.append(f)
-                s.diff = s.diff[:60_000]
-            except (RuntimeError, OSError):
-                pass
+        if not s.commits:
+            found = re.findall(r"^\s*commits?\s+([0-9a-f]{7,40})\b", s.transcript, re.MULTILINE)
+            found += [m.strip("()") for m in
+                      re.findall(r"\([0-9a-f]{7,40}\)", s.transcript)]
+            for sha in found:
+                if sha in s.commits:
+                    continue
+                try:
+                    _run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo)
+                    s.commits.append(sha)
+                except RuntimeError:
+                    continue
 
         s.files = sorted(set(s.files) | {f for c in cps for f in (c.get("files") or [])})
+        s.checkpoint_count = len(cps)
+        if m := re.search(r"^\s*author\s+(.+?)\s*<", s.transcript, re.MULTILINE):
+            s.author = m.group(1).strip()
+        s.tokens = token_usage(repo, sid)
+        s.added, s.removed = diff_stats(repo, s)
         out.append(s)
 
     out.sort(key=lambda x: x.started_at, reverse=True)
     return out
+
+
+def token_usage(repo: Path, session_id: str) -> dict:
+    """Token counts for a session, straight from Entire."""
+    if not session_id:
+        return {}
+    try:
+        d = json.loads(_run(["entire", "session", "tokens", session_id, "--json"], cwd=repo))
+    except (RuntimeError, json.JSONDecodeError):
+        return {}
+    return d.get("tokens", {}) if isinstance(d, dict) else {}
+
+
+def diff_stats(repo: Path, sess) -> tuple[int, int]:
+    """Lines added and removed, committed or not."""
+    added = removed = 0
+    try:
+        if sess.commits:
+            raw = _run(["git", "show", "--numstat", "--format=", sess.commits[-1]], cwd=repo)
+        else:
+            raw = _run(["git", "diff", "--numstat", "HEAD"], cwd=repo)
+            for f in _run(["git", "ls-files", "--others", "--exclude-standard"],
+                          cwd=repo).splitlines():
+                fp = repo / f.strip()
+                if f.strip() and fp.is_file():
+                    try:
+                        added += len(fp.read_text(errors="replace").splitlines())
+                    except OSError:
+                        pass
+    except RuntimeError:
+        return added, removed
+
+    for line in raw.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            a, r = parts[0], parts[1]
+            added += int(a) if a.isdigit() else 0
+            removed += int(r) if r.isdigit() else 0
+    return added, removed
 
 
 def active_sessions(repo: Path, quiet_minutes: int = 3) -> set[str]:
