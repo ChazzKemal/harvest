@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,37 +46,67 @@ def checkpoints(repo: Path, since: str = "30d") -> list[dict]:
     return data if isinstance(data, list) else data.get("checkpoints", [])
 
 
-def load(repo: Path, checkpoint_id: str) -> Session:
-    s = Session(checkpoint_id=checkpoint_id)
+def _parse_transcript(text: str) -> list[str]:
+    """Entire renders turns as [User] / [Assistant] / [Tool] blocks."""
+    return [m.strip() for m in re.findall(
+        r"^\[User\]\s*(.+?)(?=^\[(?:User|Assistant|Tool)\]|\Z)",
+        text, re.MULTILINE | re.DOTALL)]
 
-    try:
-        s.transcript = _run(["entire", "checkpoint", "explain", checkpoint_id], cwd=repo)
-    except RuntimeError as e:
-        s.transcript = f"(transcript unavailable: {e})"
 
-    try:
-        meta = json.loads(_run(["entire", "checkpoint", "show", checkpoint_id, "--json"], cwd=repo))
-        s.session_id = meta.get("session_id", "")
-        s.agent = meta.get("agent", "")
-        s.model = meta.get("model", "")
-        s.started_at = meta.get("started_at", "") or meta.get("created_at", "")
-        s.files = meta.get("files", []) or meta.get("modified_files", [])
-        for key in ("prompts", "user_prompts"):
-            if isinstance(meta.get(key), list):
-                s.prompts = [p if isinstance(p, str) else p.get("text", "") for p in meta[key]]
-                break
-        if commit := meta.get("commit") or meta.get("commit_sha"):
-            s.commits = [commit]
-    except RuntimeError:
-        pass
+def sessions(repo: Path, since: str = "30d") -> list[Session]:
+    """Checkpoints grouped into one Session each — a session can have several."""
+    by_session: dict[str, list[dict]] = {}
+    for cp in checkpoints(repo, since):
+        by_session.setdefault(cp.get("session_id") or cp.get("checkpoint_id", ""), []).append(cp)
 
-    if s.commits:
-        try:
-            s.diff = _run(["git", "show", "--stat", "--patch", s.commits[0]], cwd=repo)[:60_000]
-        except RuntimeError:
-            pass
+    out: list[Session] = []
+    for sid, cps in by_session.items():
+        cps.sort(key=lambda c: c.get("date", ""))
+        s = Session(checkpoint_id=cps[-1].get("checkpoint_id", ""), session_id=sid, agent="Codex")
+        s.started_at = cps[0].get("date", "")
 
-    return s
+        parts: list[str] = []
+        for cp in cps:
+            cid = cp.get("checkpoint_id", "")
+            # The commit message on a checkpoint is the prompt that produced it.
+            if msg := (cp.get("message") or "").strip():
+                s.prompts.append(msg)
+            try:
+                parts.append(_run(["entire", "checkpoint", "explain", cid], cwd=repo))
+            except RuntimeError:
+                pass
+
+        s.transcript = "\n\n".join(parts)
+        # Prefer real user turns from the transcript when we can read them.
+        if turns := _parse_transcript(s.transcript):
+            s.prompts = turns + [p for p in s.prompts if p not in turns]
+
+        s.commits = [c.get("commit", "") for c in cps if c.get("commit")]
+        if s.commits:
+            try:
+                s.diff = _run(["git", "show", "--stat", "--patch", s.commits[-1]], cwd=repo)[:60_000]
+            except RuntimeError:
+                pass
+        else:
+            # Not committed yet. Include untracked files too — `git diff` ignores
+            # them, and a brand-new tool is entirely untracked.
+            try:
+                s.diff = _run(["git", "diff", "HEAD"], cwd=repo)
+                new = _run(["git", "ls-files", "--others", "--exclude-standard"], cwd=repo)
+                for f in [x for x in new.splitlines() if x.strip()][:20]:
+                    body = (repo / f).read_text(errors="replace")[:8_000] \
+                        if (repo / f).is_file() else ""
+                    s.diff += f"\n\n--- new file: {f} ---\n{body}"
+                    s.files.append(f)
+                s.diff = s.diff[:60_000]
+            except (RuntimeError, OSError):
+                pass
+
+        s.files = sorted(set(s.files) | {f for c in cps for f in (c.get("files") or [])})
+        out.append(s)
+
+    out.sort(key=lambda x: x.started_at, reverse=True)
+    return out
 
 
 def git_log(repo: Path, since: str = "30 days ago") -> str:

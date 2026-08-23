@@ -114,11 +114,7 @@ def cmd_run(args) -> int:
     seen_sessions: set[str] = set()
 
     if args.source in ("entire", "both"):
-        for cp in sources.checkpoints(repo, args.since):
-            cid = cp.get("id") or cp.get("checkpoint_id") or ""
-            if not cid:
-                continue
-            s = sources.load(repo, cid)
+        for s in sources.sessions(repo, args.since):
             candidates.append(s)
             if s.session_id:
                 seen_sessions.add(s.session_id)
