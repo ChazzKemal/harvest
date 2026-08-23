@@ -120,6 +120,7 @@ def sessions(repo: Path, since: str = "30d") -> list[Session]:
             s.author = m.group(1).strip()
         s.tokens = token_usage(repo, sid)
         s.added, s.removed = diff_stats(repo, s)
+        s.diff = session_diff(repo, s)
         out.append(s)
 
     out.sort(key=lambda x: x.started_at, reverse=True)
@@ -135,6 +136,32 @@ def token_usage(repo: Path, session_id: str) -> dict:
     except (RuntimeError, json.JSONDecodeError):
         return {}
     return d.get("tokens", {}) if isinstance(d, dict) else {}
+
+
+def session_diff(repo: Path, sess) -> str:
+    """The actual patch a session produced.
+
+    added/removed were being counted while the patch itself was thrown away, so
+    the record could say sixty lines changed without being able to show which.
+    The commits are already linked to the session, so the exact change is one
+    `git show` away — no guessing from timestamps.
+    """
+    parts = []
+    for sha in sess.commits:
+        try:
+            parts.append(_run(["git", "show", "--patch", "--format=commit %H%n%s%n", sha],
+                              cwd=repo))
+        except RuntimeError:
+            continue
+    if parts:
+        return "\n".join(parts)[:200_000]
+
+    # Nothing committed yet: whatever is still uncommitted is the best available
+    # picture of what this session did.
+    try:
+        return working_diff(repo)
+    except RuntimeError:
+        return ""
 
 
 def diff_stats(repo: Path, sess) -> tuple[int, int]:

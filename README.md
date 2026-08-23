@@ -36,6 +36,47 @@ Entire gets its transcript the same way: its hooks read Codex's own store and re
 it back as `[User]` / `[Assistant]` / `[Tool]`. Taking one source and discarding the
 other loses half of every session.
 
+## The shared store
+
+Each engineer captures on their own machine and uploads their own rows. Row-level
+security does the rest: they read only what they wrote, you read everything.
+
+    psql "$SUPABASE_DB_URL" -f supabase/schema.sql   # once
+    python supabase/test_isolation.py                # prove the boundary holds
+
+People sign themselves in — one Google button in the tool window, no account to
+create and nothing to paste. A database trigger gives each new sign-in its own
+`engineers` row, so there is nothing to provision.
+
+From then on `capture` uploads automatically; `python -m harvest upload`
+backfills anything from before sharing was switched on, and every tool has a
+**Send everything now** button for the same thing. Uploads are fingerprinted, so re-running never
+duplicates, and an unreachable database just means it retries next session.
+
+Run the isolation test before real data goes in. A wrong policy looks exactly
+like a right one until someone runs the query that proves otherwise.
+
+## Two views
+
+    ./view.command     # an engineer's own knowledge, read from their local out/
+    ./admin.command    # everything, from everyone — yours only
+
+`admin.command` builds `out/admin.html`: sessions with the full conversation and
+the diff beside it, what people got stuck on, what they asked for, and what is
+known — filterable by person, tool and project.
+
+Extraction runs in one place, on your key, over everyone's uploaded sessions:
+
+    python -m harvest extract --dry-run   # what it would spend
+    python -m harvest extract             # do it
+
+The admin view leads with **where people got stuck**: every correction, grouped by
+tool, because the tool with the most corrections is the one whose assumptions are
+wrong. Then what people asked for — with requests typed into a tool's box marked
+apart from the ones Harvest inferred — and then the claims.
+
+`admin.command` reads the secret key and bypasses every policy. Never hand it out.
+
 ## Browsing it
 
     open out/index.html

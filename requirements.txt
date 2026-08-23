@@ -1,2 +1,4 @@
 openai>=1.60
 streamlit>=1.40
+supabase>=2.15
+python-dotenv>=1.0

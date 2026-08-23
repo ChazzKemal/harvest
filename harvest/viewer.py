@@ -10,15 +10,14 @@ import streamlit as st
 
 OUT = Path(__file__).resolve().parent.parent / "out"
 
-TYPE_LABELS = {
-    "data_semantics": "What the data means",
-    "hygiene_rule": "Data hygiene",
-    "implicit_constraint": "Unmodelled constraints",
-    "objective_tradeoff": "What good looks like",
-    "acceptance_heuristic": "How they judge an answer",
-    "exception_override": "Manual overrides",
-    "vocabulary": "Vocabulary",
-}
+# Both files run two ways: as a module, and as a script under `streamlit run`,
+# which gives them no package context. Cover both or the viewer dies on launch.
+try:
+    from .labels import TYPE_LABELS
+except ImportError:  # launched as a script by streamlit
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from labels import TYPE_LABELS
 
 
 def _jsonl(name: str) -> list[dict]:
@@ -38,6 +37,13 @@ def _reports() -> list[tuple[Path, str, str]]:
 
 
 st.set_page_config(page_title="Harvest", layout="wide")
+
+# Same palette as out/index.html and the admin view — one product, three surfaces.
+try:
+    from .style import CSS
+except ImportError:
+    from style import CSS
+st.markdown(CSS, unsafe_allow_html=True)
 st.title("Harvest")
 st.caption("What your engineers know, taken from their sessions.")
 

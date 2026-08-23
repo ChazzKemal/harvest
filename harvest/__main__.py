@@ -13,7 +13,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import chats, codex_store, sources
+from . import adminpage, chats, codex_store, sources, store, upload
 from .extract import extract
 from . import page as pagegen
 from .gate import assess, human_turns
@@ -139,6 +139,20 @@ def _write(sess, result: dict, label: str) -> Path:
                                 "checkpoint": sess.checkpoint_id,
                                 "tool": _tool_of(sess),
                                 "agent": sess.agent, "date": stamp}) + "\n")
+    # Corrections were only ever rendered into the markdown report, which means
+    # they could not be filtered, counted or compared across sessions. They are
+    # the clearest signal of where someone got stuck, so keep them as data too.
+    xf = OUT / "corrections.jsonl"
+    kept_x = [l for l in xf.read_text().splitlines() if l.strip()
+              and json.loads(l).get("session") != key] if xf.exists() else []
+    with xf.open("w") as f:
+        for line in kept_x:
+            f.write(line + "\n")
+        for x in result.get("corrections", []):
+            f.write(json.dumps({**x, "session": key,
+                                "checkpoint": sess.checkpoint_id,
+                                "tool": _tool_of(sess),
+                                "agent": sess.agent, "date": stamp}) + "\n")
     return path
 
 
@@ -212,6 +226,7 @@ def cmd_capture(args) -> int:
     total = len(chats.load_all(OUT))
     note = f", {skipped} still running" if skipped else ""
     print(f"Chats: {saved} new or updated, {total} kept in total{note}.")
+    upload.push(project=Path(args.repo).resolve().name)
     pagegen.build(OUT)
     return 0
 
@@ -257,6 +272,7 @@ def cmd_run(args) -> int:
     total = len(chats.load_all(OUT))
     note = f", {skipped} still running" if skipped else ""
     print(f"Chats: {saved} new or updated, {total} kept in total{note}.")
+    upload.push(project=Path(args.repo).resolve().name)
     pagegen.build(OUT)
     return 0
 
@@ -347,6 +363,9 @@ def cmd_run(args) -> int:
         done += 1
 
     if not args.dry_run and OUT.exists():
+        # After extraction, not before: upload what this run actually produced.
+        # Never on a dry run — that promises to spend nothing and change nothing.
+        upload.push(project=repo.name)
         pagegen.build(OUT)
 
     if done and args.dry_run:
@@ -376,6 +395,76 @@ def cmd_weekly(args) -> int:
 def cmd_page(_args) -> int:
     p = pagegen.build(OUT)
     print(f"Wrote {p}")
+    return 0
+
+
+def cmd_extract(args) -> int:
+    """Extract from the shared store: everyone's sessions, on your key, here.
+
+    The counterpart to `run`. `run` reads this machine's own sessions; this reads
+    what everyone has uploaded, so a person never needs a key to have their work
+    understood — only to talk to the agent in the first place.
+    """
+    _load_env()
+    c = store.client()
+
+    done = store.already_extracted(c) if not args.force else set()
+    rows = store.sessions(c)
+    batch = store.new_batch()
+
+    todo = [(s_, eng, proj) for s_, eng, proj in rows if s_.session_id not in done]
+    if not todo:
+        print(f"Nothing new. {len(rows)} session(s) in the store, all extracted.")
+        return 0
+
+    print(f"{len(todo)} session(s) not yet extracted, of {len(rows)} in the store.\n")
+    claims = corrections = spent = skipped = 0
+    for sess, engineer, project in todo:
+        decision = assess(sess, min_words=args.min_words)
+        label = sess.session_id[:12]
+        if not decision.run and not args.force:
+            print(f"  {label} — skipped: {decision}")
+            skipped += 1
+            continue
+        if args.dry_run:
+            print(f"  {label} — would send: {decision}, "
+                  f"{len(sess.transcript)} chars transcript, {len(sess.diff)} chars diff")
+            spent += 1
+            continue
+        result = extract(sess.transcript, sess.diff, "", model_name=args.model)
+        tool = _tool_of(sess)
+        n_c, n_x = store.write_back(c, sess, engineer, project, tool, result, batch)
+        claims += n_c
+        corrections += n_x
+        spent += 1
+        print(f"  {label} — {n_c} claims, {n_x} corrections")
+
+    if args.dry_run:
+        print(f"\n{spent} session(s) would be sent, {skipped} skipped without spending.")
+    else:
+        print(f"\n{spent} session(s) extracted, {skipped} skipped. "
+              f"{claims} claims, {corrections} corrections written back.")
+    return 0
+
+
+def cmd_admin(_args) -> int:
+    """The whole record, everyone's, as one page. Yours only."""
+    _load_env()
+    if not os.environ.get("SUPABASE_SECRET_KEY"):
+        print("Set SUPABASE_SECRET_KEY in Harvest/.env first.")
+        return 1
+    OUT.mkdir(exist_ok=True)
+    path = adminpage.build(OUT)
+    print(f"Written to {path}")
+    return 0
+
+
+def cmd_upload(args) -> int:
+    """Backfill. Everything already sent is skipped by fingerprint."""
+    n = upload.push(project=Path(args.repo).resolve().name)
+    if not n:
+        print("Nothing new to send." if os.environ.get("SUPABASE_URL")
+              else "Sharing isn't set up on this machine.")
     return 0
 
 
@@ -426,6 +515,20 @@ def main() -> int:
 
     g = sub.add_parser("page", help="rebuild out/index.html from what is already there")
     g.set_defaults(fn=cmd_page)
+
+    u = sub.add_parser("upload", help="send captured knowledge to the shared store")
+    u.add_argument("--repo", default="../Cumulate", help="repo the sessions came from")
+    u.set_defaults(fn=cmd_upload)
+
+    e = sub.add_parser("extract", help="extract from everyone's uploaded sessions (your key)")
+    e.add_argument("--dry-run", action="store_true", help="show what would be sent, spend nothing")
+    e.add_argument("--force", action="store_true", help="re-extract sessions already done")
+    e.add_argument("--model", default=None)
+    e.add_argument("--min-words", type=int, default=3)
+    e.set_defaults(fn=cmd_extract)
+
+    ad = sub.add_parser("admin", help="build the everyone-view page")
+    ad.set_defaults(fn=cmd_admin)
 
     m = sub.add_parser("models", help="list models your key can use")
     m.set_defaults(fn=cmd_models)

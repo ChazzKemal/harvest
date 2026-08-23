@@ -49,7 +49,23 @@ def save(out: Path, sess) -> tuple[Path, bool]:
         "removed": sess.removed,
         "duration_s": _duration(sess.turns),
         "transcript": sess.transcript,
+        # What actually changed. Computed already; keeping it is what lets
+        # the record show the code next to the conversation that caused it.
+        "diff": sess.diff,
     }
+    # Merge, never replace. The same session arrives from two sources: the Codex
+    # store carries the turns and the files, Entire's checkpoints carry the
+    # commits and the diff. Whichever lands second must not blank what the first
+    # one knew — writing the payload wholesale silently destroyed transcripts.
+    if f.exists():
+        try:
+            old = json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            old = {}
+        for k, v in old.items():
+            if not payload.get(k) and v:
+                payload[k] = v
+
     new = json.dumps(payload, indent=1, ensure_ascii=False)
     if f.exists() and f.read_text(encoding="utf-8") == new:
         return f, False
