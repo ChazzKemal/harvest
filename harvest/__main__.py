@@ -115,9 +115,17 @@ def _write(sess, result: dict, label: str) -> Path:
     path = OUT / "sessions" / f"{stamp}-{label}.md"
     path.write_text(to_markdown(sess, result))
 
-    with (OUT / "claims.jsonl").open("a") as f:
+    # A session can be reported more than once (a temporary checkpoint later gains
+    # a commit). Drop its previous claims before appending, or they accumulate.
+    key = sess.session_id or label
+    cf = OUT / "claims.jsonl"
+    kept = [l for l in cf.read_text().splitlines() if l.strip()
+            and json.loads(l).get("session") != key] if cf.exists() else []
+    with cf.open("w") as f:
+        for line in kept:
+            f.write(line + "\n")
         for c in result.get("claims", []):
-            f.write(json.dumps({**c, "session": sess.session_id or label,
+            f.write(json.dumps({**c, "session": key,
                                 "checkpoint": sess.checkpoint_id,
                                 "agent": sess.agent, "date": stamp}) + "\n")
     return path

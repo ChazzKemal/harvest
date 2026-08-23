@@ -59,6 +59,14 @@ anything.
 appended to `out/asks.jsonl` regardless — a working one-shot is still a complete spec,
 and that index tells you what people actually want built. It costs nothing.
 
+## Browsing it
+
+    ./view.command        # or: ./.venv/bin/streamlit run harvest/viewer.py
+
+Three tabs: **Knowledge** (every claim, filterable by type, confidence, and whether it
+generalises), **Sessions** (the full report per session), and **What people asked for**
+(every request, extracted or not — this is your roadmap signal).
+
 ## Output
 
     out/sessions/2026-08-23-a1b2c3d4e5f6.md   one readable page per session
