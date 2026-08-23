@@ -152,6 +152,33 @@ function show(view,id){
   const c=$('#crumb'); if(c) c.textContent=el?el.dataset.title||'':'';
   window.scrollTo(0,0);
 }
+const TKEY='harvest.tools.open';
+function toolState(){
+  try{ return JSON.parse(localStorage.getItem(TKEY)||'{}') }catch(e){ return {} }
+}
+function saveTool(name,open){
+  try{ const s=toolState(); s[name]=open; localStorage.setItem(TKEY,JSON.stringify(s)) }
+  catch(e){ /* private window, blocked storage — the page still works */ }
+}
+function restoreTools(){
+  const s=toolState();
+  $$('details.tool').forEach(d=>{
+    const k=d.querySelector('.tname').textContent;
+    if(k in s) d.open=s[k];
+    d.addEventListener('toggle',()=>{ saveTool(k,d.open); syncToolsBox(); });
+  });
+  syncToolsBox();
+}
+function syncToolsBox(){
+  const all=$$('details.tool'); if(!all.length) return;
+  const box=$('#ftools');
+  const open=all.filter(d=>d.open).length;
+  box.checked = open===all.length;
+  box.indeterminate = open>0 && open<all.length;
+}
+function expandTools(){
+  $$('details.tool').forEach(d=>{ d.open=$('#ftools').checked; });
+}
 function turnFilter(){
   const on=$$('.fturn:checked').map(x=>x.value);
   ['t-user','t-assistant','t-steps'].forEach(k=>
@@ -162,6 +189,9 @@ function expandAll(){
 }
 function filter(){
   const types=$$('.ftype:checked').map(x=>x.value);
+  const narrowed = types.length<$$('.ftype').length
+                || $$('.fconf:checked').length<$$('.fconf').length
+                || $('#fgen').checked;
   const confs=$$('.fconf:checked').map(x=>x.value);
   const gen=$('#fgen').checked;
   let n=0;
@@ -175,8 +205,12 @@ function filter(){
     while(n&&n.classList.contains('card')){ if(!n.classList.contains('hide')) any=true; n=n.nextElementSibling; }
     h.classList.toggle('hide',!any);
   });
-  $$('#view-knowledge .grp').forEach(g=>
-    g.classList.toggle('hide', !g.querySelectorAll('.card:not(.hide)').length));
+  $$('#view-knowledge .grp').forEach(g=>{
+    const any=g.querySelectorAll('.card:not(.hide)').length;
+    g.classList.toggle('hide', !any);
+    // Don't let a collapsed group swallow the only matches.
+    if(any && narrowed) g.open=true;
+  });
   $('#shown').textContent=n;
 }
 function init(){
@@ -184,6 +218,8 @@ function init(){
   $$('.ftype,.fconf,#fgen').forEach(i=>i.onchange=filter);
   $$('.fturn').forEach(i=>i.onchange=turnFilter);
   $('#fexpand').onchange=expandAll;
+  $('#ftools').onchange=expandTools;
+  restoreTools();
   show('knowledge');
 }
 // This script is inline at the end of the document, so DOMContentLoaded may
@@ -372,6 +408,8 @@ def build(out_dir: Path) -> Path:
                f'{k}<span class="n">{n}</span></label>' for k, n in confs.items() if n)}
       <h4>Scope</h4>
       <label class="f"><input type="checkbox" id="fgen">Only claims that generalise</label>
+      <h4>View</h4>
+      <label class="f"><input type="checkbox" id="ftools" checked>Expand all tools</label>
     </div>
   </aside>
 </div>
