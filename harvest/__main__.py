@@ -164,6 +164,13 @@ def cmd_run(args) -> int:
                 continue
             candidates.append(s)
 
+    live = sources.active_sessions(repo) - {args.ended} if args.ended else sources.active_sessions(repo)
+    if live:
+        before = len(candidates)
+        candidates = [c for c in candidates if c.session_id not in live]
+        if before - len(candidates):
+            print(f"  ({before - len(candidates)} session still running — left alone)")
+
     if not candidates:
         print("No sessions found.\n"
               "Entire records a session only once it commits; Codex keeps the rest in its\n"
@@ -177,15 +184,15 @@ def cmd_run(args) -> int:
             continue
         if sess.is_empty:
             print(f"  {cid[:12]} — empty, skipped")
-            _mark(sess)
             skipped += 1
             continue
 
         d = assess(sess, min_words=args.min_words)
         _log_asks(sess, d)
         if not d.run and not args.force:
+            # Deliberately NOT marked as processed. The gate costs nothing to
+            # re-run, and a session judged empty may simply still be in progress.
             print(f"  {cid[:12]} — skipped: {d}")
-            _mark(sess)
             skipped += 1
             continue
 
@@ -233,6 +240,8 @@ def main() -> int:
     r.add_argument("--source", choices=["entire", "codex", "both"], default="both",
                    help="where to read sessions from (default both)")
     r.add_argument("--working", action="store_true", help="summarise uncommitted changes instead")
+    r.add_argument("--ended", default=None,
+                   help="session id the hook says just finished — safe to read now")
     r.add_argument("--force", action="store_true",
                    help="reprocess already-seen checkpoints and ignore the spend gate")
     r.add_argument("--min-words", type=int, default=3,

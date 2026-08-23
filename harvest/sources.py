@@ -120,6 +120,32 @@ def sessions(repo: Path, since: str = "30d") -> list[Session]:
     return out
 
 
+def active_sessions(repo: Path, quiet_minutes: int = 3) -> set[str]:
+    """Sessions that may still be running. Reading one mid-flight gets half a story.
+
+    Entire reports every session as `idle`, including ones whose window is long
+    closed, so status is no help. Fall back to staleness: a session untouched for
+    `quiet_minutes` is safe to read. The session that just ended is passed in
+    explicitly by the hook instead of being guessed at here.
+    """
+    try:
+        data = json.loads(_run(["entire", "session", "list", "--json"], cwd=repo) or "[]")
+    except (RuntimeError, json.JSONDecodeError):
+        return set()
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=quiet_minutes)
+    live: set[str] = set()
+    for s in data:
+        if not isinstance(s, dict) or not s.get("session_id"):
+            continue
+        try:
+            if datetime.fromisoformat(s.get("last_active", "")) > cutoff:
+                live.add(s["session_id"])
+        except (TypeError, ValueError):
+            continue
+    return live
+
+
 def git_log(repo: Path, since: str = "30 days ago") -> str:
     return _run(["git", "log", f"--since={since}", "--format=%h %ad %s", "--date=short"], cwd=repo)
 
