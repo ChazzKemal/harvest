@@ -333,3 +333,83 @@ create policy corrections_read_admin on corrections
 drop policy if exists chats_read_admin on chats;
 create policy chats_read_admin on chats
   for select using (public.is_admin());
+
+-- ------------------------------------------------------------ shared tools
+-- The one table in this file an engineer can read someone else's rows from.
+--
+-- That is a deliberate break from the rule at the top, so it is worth being
+-- precise about why it is safe here and nowhere else. Everything above is a
+-- record OF someone — their sessions, their transcripts, their corrections.
+-- A row here is a thing someone MADE and chose to hand over: an app.py and the
+-- assumptions beside it, published by an explicit act. Nobody is enrolled into
+-- this table by working; they are in it because they pressed a button.
+--
+-- Without it a good tool reaches nobody. Karl builds a duty calculator, and the
+-- next person to need one builds a second — with different assumptions, quietly
+-- disagreeing with the first. Splitting knowledge across two tools is the exact
+-- thing AGENTS.md tells the agent to avoid, and until now the agent could only
+-- see one person's shelf.
+create table if not exists shared_tools (
+  id           uuid primary key default gen_random_uuid(),
+  engineer     uuid not null references engineers(id) on delete cascade,
+  -- Denormalised on purpose. `engineers` stays readable only to yourself, so a
+  -- join would tell you nothing — and it holds email addresses, which have no
+  -- business travelling with a tool. The name is what a colleague needs.
+  author_name  text not null default '',
+  slug         text not null,
+  name         text not null,
+  what         text default '',
+  code         text not null,
+  assumptions  text default '',
+  -- Bumped by the publisher, never edited in place. Old versions stay readable
+  -- so "which one was I using in March, and what did it assume then" has an
+  -- answer — the assumptions change between versions, and that is the part
+  -- worth being able to look back at.
+  version      integer not null default 1,
+  published_at timestamptz not null default now(),
+  unique (engineer, slug, version)
+);
+
+create index if not exists shared_tools_slug_idx on shared_tools (slug);
+
+alter table shared_tools enable row level security;
+alter table shared_tools force row level security;
+
+-- Read: anyone signed in. This is the exception, and it is the whole point.
+drop policy if exists shared_tools_read_all on shared_tools;
+create policy shared_tools_read_all on shared_tools
+  for select using (auth.uid() is not null);
+
+-- Write: as yourself only. Same guard as everywhere else — `engineer` is just a
+-- value the client sends, so without this anyone could publish under a
+-- colleague's name, and a tool carries their judgement with it.
+drop policy if exists shared_tools_write_own on shared_tools;
+create policy shared_tools_write_own on shared_tools
+  for insert with check (engineer = auth.uid());
+
+-- Still no update and no delete, in keeping with the rest of the store. A fix
+-- is a new version. Someone who published something they should not have needs
+-- the secret key to remove it — which is the correct amount of friction for an
+-- irreversible act, and means it is your decision rather than theirs.
+
+-- security_invoker matters here. A view runs with its creator's rights by
+-- default, which would quietly bypass every policy above; this makes it run as
+-- whoever queries it, so the view is exactly as safe as the table.
+create or replace view shared_tools_latest
+  with (security_invoker = true) as
+select distinct on (engineer, slug) *
+from shared_tools
+order by engineer, slug, version desc;
+
+-- ------------------------------------------------------- code, not just diffs
+-- A diff tells you what changed; it is not something you can open and edit, and
+-- a bare sha points into a repository on somebody else's laptop. Neither gives
+-- you a tool you can pick up and improve.
+--
+-- So the source of every tool a session touched travels with the session, along
+-- with the commits in full. Data files never do: `inputs` describes their shape
+-- — sheets, columns, row counts, a hash — which is enough to read a tool and
+-- know what it operates on, with nobody's spreadsheet leaving their machine.
+alter table chats add column if not exists commit_log jsonb default '[]'::jsonb;
+alter table chats add column if not exists sources    jsonb default '{}'::jsonb;
+alter table chats add column if not exists inputs     jsonb default '[]'::jsonb;

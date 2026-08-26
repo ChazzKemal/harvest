@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import snapshot
+
 
 def _run(args: list[str], cwd: Path | None = None) -> str:
     try:
@@ -39,6 +41,12 @@ class Session:
     checkpoint_count: int = 0
     added: int = 0
     removed: int = 0
+    # The code itself, and the shape of what it ran against. A diff cannot be
+    # opened and edited; these are what make a session something to work on
+    # later rather than only something to read.
+    commit_log: list[dict] = field(default_factory=list)
+    sources: dict = field(default_factory=dict)
+    inputs: list[dict] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -126,6 +134,8 @@ def sessions(repo: Path, since: str = "30d") -> list[Session]:
         s.tokens = token_usage(repo, sid)
         s.added, s.removed = diff_stats(repo, s)
         s.diff = session_diff(repo, s)
+        s.commit_log = commit_log(repo, s)
+        snapshot.enrich(repo, s)
         out.append(s)
 
     out.sort(key=lambda x: x.started_at, reverse=True)
@@ -159,7 +169,7 @@ def session_diff(repo: Path, sess) -> str:
         except RuntimeError:
             continue
     if parts:
-        return "\n".join(parts)[:200_000]
+        return _capped("\n".join(parts), 200_000)
 
     # Nothing committed yet: whatever is still uncommitted is the best available
     # picture of what this session did.
@@ -227,6 +237,65 @@ def git_log(repo: Path, since: str = "30 days ago") -> str:
     return _run(["git", "log", f"--since={since}", "--format=%h %ad %s", "--date=short"], cwd=repo)
 
 
+def _capped(body: str, limit: int) -> str:
+    """Cut long output, and say so. A silent slice reads as a complete record."""
+    if len(body) <= limit:
+        return body
+    return (body[:limit] +
+            f"\n\n[... truncated: {len(body) - limit} more characters "
+            f"of {len(body)} total]\n")
+
+
 def working_diff(repo: Path) -> str:
-    """Uncommitted changes — the fallback when a session never committed."""
-    return _run(["git", "diff", "HEAD"], cwd=repo)[:60_000]
+    """Uncommitted changes — the fallback when a session never committed.
+
+    Untracked files are included deliberately. `git diff HEAD` cannot see them,
+    and a brand new tools/<name>/app.py is untracked — which is to say the main
+    thing a session produces was the one thing the record left out.
+    """
+    parts = [_run(["git", "diff", "HEAD"], cwd=repo)]
+    try:
+        new = _run(["git", "ls-files", "--others", "--exclude-standard"],
+                   cwd=repo).splitlines()
+    except RuntimeError:
+        new = []
+    for rel in new:
+        if not rel.strip():
+            continue
+        # --no-index against /dev/null renders a new file as a normal patch, so
+        # the result stays one applicable diff rather than a mixture.
+        #
+        # Not _run: this git exits 1 to mean "they differ", which is the whole
+        # point of asking. Treating that as failure threw away every new file
+        # and left the record looking complete.
+        r = subprocess.run(["git", "diff", "--no-index", "--", "/dev/null", rel],
+                           cwd=repo, capture_output=True, text=True)
+        if r.returncode in (0, 1) and r.stdout:
+            parts.append(r.stdout)
+    return _capped("\n".join(x for x in parts if x), 60_000)
+
+
+def commit_log(repo: Path, sess) -> list[dict]:
+    """The commits themselves, not just their ids.
+
+    A sha is a pointer into a repository on somebody else's laptop. Kept alone
+    it records nothing anyone else can ever open, so the message, the author and
+    the date travel with it.
+    """
+    out = []
+    for sha in sess.commits:
+        try:
+            raw = _run(["git", "show", "--no-patch",
+                        "--format=%H%n%an%n%aI%n%s", sha], cwd=repo).splitlines()
+        except RuntimeError:
+            continue
+        if len(raw) < 4:
+            continue
+        try:
+            files = [l for l in _run(["git", "show", "--name-only", "--format=", sha],
+                                     cwd=repo).splitlines() if l.strip()]
+        except RuntimeError:
+            files = []
+        out.append({"sha": raw[0], "author": raw[1], "date": raw[2],
+                    "subject": raw[3], "files": files})
+    return out

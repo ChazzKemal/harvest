@@ -199,6 +199,11 @@ def _chat_rows(me: str, project: str) -> list[dict]:
             "files": c.get("files", []), "commits": c.get("commits", []),
             "added": c.get("added") or 0, "removed": c.get("removed") or 0,
             "turns": c.get("turns", []), "diff": (c.get("diff") or "")[:MAX_DIFF],
+            # Uploaded per session so the record does not depend on anyone
+            # remembering to publish. Data files are described, never sent.
+            "commit_log": c.get("commit_log", []),
+            "sources": c.get("sources", {}),
+            "inputs": c.get("inputs", []),
         })
     return rows
 

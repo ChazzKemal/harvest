@@ -52,6 +52,12 @@ def save(out: Path, sess) -> tuple[Path, bool]:
         # What actually changed. Computed already; keeping it is what lets
         # the record show the code next to the conversation that caused it.
         "diff": sess.diff,
+        # The code as it was left, the commits in full rather than as ids, and
+        # the shape of the data — never the data. This is the raw material the
+        # per-person repo is built from.
+        "commit_log": sess.commit_log,
+        "sources": sess.sources,
+        "inputs": sess.inputs,
     }
     # Merge, never replace. The same session arrives from two sources: the Codex
     # store carries the turns and the files, Entire's checkpoints carry the

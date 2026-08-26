@@ -15,6 +15,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import snapshot
 from .sources import Session
 
 CODEX_DIR = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
@@ -121,6 +122,9 @@ def sessions_for(repo: Path, since_days: int = 30) -> list[Session]:
                                     "text": ", ".join(paths), "ts": ts})
 
             s.transcript = "\n\n".join(lines)
+            # This builder is the one that knows which files were touched, so
+            # it is the one that can say what the code looked like afterwards.
+            snapshot.enrich(repo, s)
             out.append(s)
 
     out.sort(key=lambda x: x.started_at, reverse=True)
