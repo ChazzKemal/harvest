@@ -8,7 +8,7 @@ plus a growing file of typed claims.
 
 ## Setup
 
-    cp .env.example .env        # paste your OpenAI key
+    cp .env.example .env        # paste your OpenAI key   (Windows: copy .env.example .env)
     uv venv --python 3.12 && uv pip install -r requirements.txt
 
 ## Two separate things
@@ -48,6 +48,15 @@ People sign themselves in — one Google button in the tool window, no account t
 create and nothing to paste. A database trigger gives each new sign-in its own
 `engineers` row, so there is nothing to provision.
 
+Signing in creates an account; it does not grant a key. `issue-key` is
+default-deny: anyone in the world can sign in with a Google account, so the
+shared `FALLBACK_OPENAI_KEY` is only handed to emails you have approved:
+
+    insert into allowed_emails (email) values ('person@company.com');
+
+A personal row in `api_keys` also works and takes precedence. Everyone else
+gets 403 and spends nothing.
+
 From then on `capture` uploads automatically; `python -m harvest upload`
 backfills anything from before sharing was switched on, and every tool has a
 **Send everything now** button for the same thing. Uploads are fingerprinted, so re-running never
@@ -60,6 +69,8 @@ like a right one until someone runs the query that proves otherwise.
 
     ./view.command     # an engineer's own knowledge, read from their local out/
     ./admin.command    # everything, from everyone — yours only
+
+On Windows the same two are `view.cmd` and `admin.cmd` — double-click them.
 
 `admin.command` builds `out/admin.html`: sessions with the full conversation and
 the diff beside it, what people got stuck on, what they asked for, and what is

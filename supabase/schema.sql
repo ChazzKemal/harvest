@@ -170,16 +170,29 @@ create table if not exists api_keys (
   created_at timestamptz not null default now()
 );
 
+-- Who may be issued a key at all. Default-deny: signing in creates an account,
+-- but the issue-key function hands out nothing unless the person's email is in
+-- this table (or they have their own api_keys row). Approve someone with:
+--   insert into allowed_emails (email) values ('person@company.com');
+-- The check is on the lowercased address, which the constraint below enforces
+-- at insert time so an approval can never silently fail to match.
+create table if not exists allowed_emails (
+  email      text primary key check (email = lower(email)),
+  added_at   timestamptz not null default now()
+);
+
 create table if not exists key_issues (
   id         uuid primary key default gen_random_uuid(),
   engineer   uuid not null references engineers(id) on delete cascade,
   issued_at  timestamptz not null default now()
 );
 
-alter table api_keys   enable row level security;
-alter table key_issues enable row level security;
-alter table api_keys   force row level security;
-alter table key_issues force row level security;
+alter table api_keys       enable row level security;
+alter table key_issues     enable row level security;
+alter table allowed_emails enable row level security;
+alter table api_keys       force row level security;
+alter table key_issues     force row level security;
+alter table allowed_emails force row level security;
 
 -- ------------------------------------------------------------- new sign-ins
 -- Google creates an auth user; nothing creates the matching engineers row, and

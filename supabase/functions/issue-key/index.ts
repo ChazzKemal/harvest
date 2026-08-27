@@ -5,9 +5,13 @@
 // exactly who is asking. That is what makes per-person metering and revoking
 // possible — a key baked into the app gives you neither.
 //
-// Two ways to answer, in order:
-//   1. a row in api_keys for this person  — revoke by deleting the row
-//   2. FALLBACK_OPENAI_KEY                — one shared key, no per-person control
+// Default-deny. Signing in is not enough: a key is only issued when the
+// person has been approved. Two ways to answer, in order:
+//   1. a row in api_keys for this person       — their own key; revoke by row
+//   2. their email in allowed_emails            — the shared FALLBACK_OPENAI_KEY
+// Anyone else — any Google account in the world can sign in — gets 403.
+// Approve someone with:
+//   insert into allowed_emails (email) values ('person@company.com');
 //
 // Worth knowing: handing out a real OpenAI key means it lives on that person's
 // machine and they can read it. If you need spending caps you cannot be talked
@@ -44,7 +48,17 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "no access" }), { status: 403 });
   }
 
-  const key = row?.key ?? Deno.env.get("FALLBACK_OPENAI_KEY");
+  let key = row?.key;
+  if (!key) {
+    // No personal key: the shared one, and only for approved emails.
+    const email = (user.email ?? "").toLowerCase();
+    const { data: allowed } = await admin
+      .from("allowed_emails").select("email").eq("email", email).maybeSingle();
+    if (!email || !allowed) {
+      return new Response(JSON.stringify({ error: "no access" }), { status: 403 });
+    }
+    key = Deno.env.get("FALLBACK_OPENAI_KEY");
+  }
   if (!key) {
     return new Response(JSON.stringify({ error: "no key available" }), { status: 503 });
   }
