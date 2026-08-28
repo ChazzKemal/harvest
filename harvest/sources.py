@@ -10,7 +10,12 @@ from pathlib import Path
 
 
 def _run(args: list[str], cwd: Path | None = None) -> str:
-    r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    try:
+        r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+    except OSError as e:
+        # A tool that isn't installed should read as "nothing to pull", the
+        # same as a tool that ran and failed - every caller handles that.
+        raise RuntimeError(f"{args[0]} not available: {e}") from e
     if r.returncode != 0:
         raise RuntimeError(f"{' '.join(args[:3])} failed: {r.stderr.strip()[:300]}")
     return r.stdout
