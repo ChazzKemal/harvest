@@ -415,6 +415,7 @@ def build(out_dir: Path) -> Path:
 </div>
 <script>{JS}</script>"""
 
+    out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "index.html"
     path.write_text(page, encoding="utf-8")
     return path
