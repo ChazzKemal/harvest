@@ -171,7 +171,10 @@ $("#signin").onclick = () => sb.auth.signInWithOAuth({
   options: { redirectTo: location.origin + location.pathname }});
 $("#signout").onclick = async () => { await sb.auth.signOut(); location.reload(); };
 
-sb.auth.onAuthStateChange((_e, session) => { if (session) start(session); });
+// Deferred: supabase-js holds an internal lock while this callback runs, so
+// awaiting another auth-bound call (the is_admin rpc) inside it deadlocks and
+// the page silently stays on the gate.
+sb.auth.onAuthStateChange((_e, session) => { if (session) setTimeout(() => start(session), 0); });
 sb.auth.getSession().then(({data:{session}}) => { if (session) start(session); });
 
 let started = false;
