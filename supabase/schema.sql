@@ -281,3 +281,55 @@ alter table corrections add column if not exists batch uuid;
 
 create index if not exists claims_batch_idx      on claims (session_id, batch);
 create index if not exists corrections_batch_idx on corrections (session_id, batch);
+
+-- ------------------------------------------------------------------ admins
+-- The web admin panel signs in with Google like everyone else; what makes it
+-- an admin panel is this table. An email listed here reads every row of the
+-- record from a browser, with the publishable key — no secret key leaves the
+-- server side. Approve yourself with:
+--   insert into admins (email) values ('you@company.com');
+create table if not exists admins (
+  email    text primary key check (email = lower(email)),
+  added_at timestamptz not null default now()
+);
+
+alter table admins enable row level security;
+alter table admins force row level security;
+
+-- The check runs as definer so it can read admins despite RLS; anyone can call
+-- it, and all it reveals is whether the caller themselves is an admin.
+create or replace function public.is_admin()
+returns boolean
+language sql
+stable
+security definer set search_path = ''
+as $$
+  select exists (
+    select 1 from public.admins
+    where email = lower(coalesce(auth.jwt() ->> 'email', ''))
+  );
+$$;
+
+drop policy if exists engineers_read_admin on engineers;
+create policy engineers_read_admin on engineers
+  for select using (public.is_admin());
+
+drop policy if exists sessions_read_admin on sessions;
+create policy sessions_read_admin on sessions
+  for select using (public.is_admin());
+
+drop policy if exists claims_read_admin on claims;
+create policy claims_read_admin on claims
+  for select using (public.is_admin());
+
+drop policy if exists asks_read_admin on asks;
+create policy asks_read_admin on asks
+  for select using (public.is_admin());
+
+drop policy if exists corrections_read_admin on corrections;
+create policy corrections_read_admin on corrections
+  for select using (public.is_admin());
+
+drop policy if exists chats_read_admin on chats;
+create policy chats_read_admin on chats
+  for select using (public.is_admin());
