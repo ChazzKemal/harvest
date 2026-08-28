@@ -371,9 +371,22 @@ function render(d) {
         (r.why ? `<div class="assumed">why — ${esc(r.why)}</div>` : "") +
         `</div>`).join("") + `</div>`).join("");
 
-  const sessions = [...chats]
-    .sort((a, b) => (b.started_at || "").localeCompare(a.started_at || ""))
-    .map(r => sessionCard(r, names)).join("");
+  // sessions grouped by tool; the no-tool ones keep their own sub-groups
+  // by engineer and project instead of collapsing into one bucket
+  const sorted = [...chats]
+    .sort((a, b) => (b.started_at || "").localeCompare(a.started_at || ""));
+  const sgroups = {};
+  for (const r of sorted) {
+    const key = r.tool ||
+      `No tool — ${names[r.engineer] || "unknown"}${r.project ? " · " + r.project : ""}`;
+    (sgroups[key] ??= []).push(r);
+  }
+  const sessions = Object.entries(sgroups)
+    .sort((a, b) => (a[0].startsWith("No tool") - b[0].startsWith("No tool")) ||
+                    b[1].length - a[1].length)
+    .map(([label, rs]) => `<div class="group"><h3 class="gtoggle">${esc(label)} ` +
+      `<span class="gcount">${rs.length}</span></h3>` +
+      rs.map(r => sessionCard(r, names)).join("") + `</div>`).join("");
 
   $("#navs").innerHTML = [
     ["sessions", "Sessions", chats.length],
