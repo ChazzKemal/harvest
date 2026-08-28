@@ -106,6 +106,8 @@ details.steps[open]>summary:after{content:"⌃"}
 .said{color:var(--fg);font-size:13.5px;margin-top:3px}
 .said b{color:var(--accent);font-weight:500}
 .assumed{color:var(--muted);font-size:13px}
+.asklist{margin:4px 0 0 18px}
+.asklist li{margin:3px 0}
 .bar{display:flex;align-items:center;gap:9px;margin:4px 0;font-size:12.5px;color:var(--muted)}
 .bar .track{flex:1;height:6px;background:var(--raised);border-radius:3px;overflow:hidden}
 .bar .fill{height:100%;background:var(--accent);opacity:.75}
@@ -343,17 +345,30 @@ function render(d) {
       `<div class="said">they said — <b>${esc(r.person_said)}</b></div>` +
       (r.evidence ? `<div class="quote">${esc(r.evidence)}</div>` : "") + `</div>`).join("");
 
-  // what people asked for
-  const askCards = [...asks]
-    .sort((a, b) => (b.deliberate - a.deliberate) ||
-                    (b.asked_on || "").localeCompare(a.asked_on || ""))
-    .map(r => `<div class="card" ${attrs(r, names)}>` +
-      `<div class="rowhead">` +
-      `<span class="chip ${r.deliberate ? "on" : ""}">${r.deliberate ? "asked for" : "from a session"}</span>` +
-      `<b>${esc(r.tool || "no tool")}</b>` +
-      `<span class="chip">${esc(names[r.engineer] || "unknown")}</span>` +
-      `<span class="chip">${esc(r.asked_on)}</span></div>` +
-      `<div class="said">${esc(r.ask)}</div></div>`).join("");
+  // what people asked for: one card per session, its asks as bullets
+  const bySession = {};
+  for (const r of asks)
+    (bySession[`${r.session_id || r.id}|${r.engineer}`] ??= []).push(r);
+  const askCards = Object.values(bySession)
+    .sort((a, b) => (b[0].deliberate - a[0].deliberate) ||
+                    (b[0].asked_on || "").localeCompare(a[0].asked_on || ""))
+    .map(rs => {
+      const r = rs[0];
+      const seen = new Set();
+      const bullets = rs.filter(x => {
+        const t = (x.ask || "").trim().toLowerCase();
+        if (!t || seen.has(t)) return false;
+        seen.add(t);
+        return true;
+      }).map(x => `<li>${esc(x.ask)}</li>`).join("");
+      return `<div class="card" ${attrs(r, names)}>` +
+        `<div class="rowhead">` +
+        `<span class="chip ${r.deliberate ? "on" : ""}">${r.deliberate ? "asked for" : "from a session"}</span>` +
+        `<b>${esc(r.tool || "no tool")}</b>` +
+        `<span class="chip">${esc(names[r.engineer] || "unknown")}</span>` +
+        `<span class="chip">${esc(r.asked_on)}</span></div>` +
+        `<ul class="said asklist">${bullets}</ul></div>`;
+    }).join("");
 
   // what is known, grouped by tool
   const groups = {};
