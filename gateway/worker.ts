@@ -224,14 +224,20 @@ export default {
       // conversation. What is charged comes from the response, not from this.
       model = /"model"\s*:\s*"([^"]+)"/.exec(body)?.[1] ?? "";
       const allowed = (env.ALLOWED_MODELS ?? "").split(",").map((m) => m.trim()).filter(Boolean);
-      if (allowed.length && !allowed.includes(model)) {
-        return error(403, `The model "${model}" is not available through Cumulate.`);
-      }
       const budget = who.budget ?? Number(env.MONTHLY_BUDGET_USD ?? 0);
+      // Someone who picked another model inside Codex (/model, or accepting
+      // its "try the new model" offer) is told what they can pick instead.
+      const unavailable = () => {
+        const usable = (allowed.length ? allowed : Object.keys(prices(env)))
+          .filter((m) => budget <= 0 || priceFor(prices(env), m));
+        return error(403, `"${model}" is not available through Cumulate. ` +
+          (usable.length ? `Type /model and choose ${usable.join(" or ")}.` : "Ask whoever runs Cumulate."),
+          "model_not_available");
+      };
+      if (allowed.length && !allowed.includes(model)) return unavailable();
       if (budget > 0) {
-        if (!priceFor(prices(env), model)) {
-          return error(400, `No price is set for "${model}" on the gateway, so its spending cannot be counted. Ask whoever runs Cumulate.`);
-        }
+        // Without a price its spending could not be counted against the budget.
+        if (!priceFor(prices(env), model)) return unavailable();
         if (who.spent >= budget) {
           return error(403, `Your Cumulate budget for this month ($${budget}) is used up. Ask whoever runs Cumulate to raise it.`, "budget_exceeded");
         }

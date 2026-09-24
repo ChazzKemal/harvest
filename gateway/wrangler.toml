@@ -15,8 +15,9 @@ SUPABASE_URL = "https://qxdtkrsyozmpbecyccjb.supabase.co"
 # gateway_budgets table. "0" means no budget at all.
 MONTHLY_BUDGET_USD = "20"
 
-# Only these models may be used through Cumulate. Empty allows any.
-ALLOWED_MODELS = ""
+# Only these models may be used through Cumulate (comma-separated). Anyone who
+# picks another inside Codex is told to switch back. Empty allows any priced one.
+ALLOWED_MODELS = "gpt-6-sol"
 
 # USD per 1M tokens, used to count spending against the budgets. Check these
 # against openai.com/api/pricing when you set this up, and when OpenAI changes
@@ -24,6 +25,8 @@ ALLOWED_MODELS = ""
 # unexpected one (a dated snapshot) is priced by the longest matching name.
 PRICES = '''
 {
+  "gpt-6-sol":     { "input": 2.00,  "cached_input": 0.20, "output": 10.00,
+                     "long": { "above": 272000, "input": 2, "output": 1.5 } },
   "gpt-6-astra":   { "input": 10.00, "cached_input": 1.00, "output": 50.00,
                      "long": { "above": 272000, "input": 2, "output": 1.5 } },
   "gpt-5.6-sol":   { "input": 5.00,  "cached_input": 0.50, "output": 30.00,

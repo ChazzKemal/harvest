@@ -254,22 +254,37 @@ Deno.test("spending counts at once, even while the key's check is cached", async
   assertEquals(res.status, 403);
 });
 
-Deno.test("with a budget, a model with no price is refused up front", async () => {
+Deno.test("with a budget, a model with no price is refused up front, saying what to pick", async () => {
   reset();
   const { key } = await person();
   const res = await worker.fetch(request(key, { model: "unpriced", stream: true }), env(), ctxFor().ctx);
-  assertEquals(res.status, 400);
+  assertEquals(res.status, 403);
+  const { message } = (await res.json()).error;
+  assert(message.includes('"unpriced" is not available'), message);
+  assert(message.includes("/model and choose gpt-test"), message);
   assertEquals(openaiCalls().length, 0);
 });
 
-Deno.test("ALLOWED_MODELS refuses anything else", async () => {
+Deno.test("ALLOWED_MODELS refuses anything else, and names what is allowed", async () => {
   reset();
   const { key } = await person();
   const res = await worker.fetch(
     request(key, { model: "gpt-expensive", stream: true }),
     env({ ALLOWED_MODELS: "gpt-test" }), ctxFor().ctx);
   assertEquals(res.status, 403);
+  const { message, code } = (await res.json()).error;
+  assertEquals(code, "model_not_available");
+  assert(message.includes("Type /model and choose gpt-test."), message);
   assertEquals(openaiCalls().length, 0);
+});
+
+Deno.test("an allowed model is let through", async () => {
+  reset();
+  const { key } = await person();
+  openai = () => sse("gpt-test", { input_tokens: 1, output_tokens: 1 });
+  const res = await worker.fetch(request(key), env({ ALLOWED_MODELS: "gpt-test" }), ctxFor().ctx);
+  assertEquals(res.status, 200);
+  await res.text();
 });
 
 Deno.test("a non-streamed response is recorded too", async () => {
