@@ -1,7 +1,7 @@
 // Tests for the issue-key function's decision logic, with the Supabase client
 // replaced by ./mock_supabase.ts (see deno.json). Run from this directory:
 //   deno test --allow-env --allow-read --config deno.json .
-import { assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert";
 import { scenario } from "./mock_supabase.ts";
 
 // Capture the handler instead of starting a server.
@@ -14,9 +14,17 @@ let handler: (req: Request) => Response | Promise<Response>;
 
 Deno.env.set("SUPABASE_URL", "http://localhost");
 Deno.env.set("SB_SECRET_KEY", "test-secret");
-Deno.env.set("FALLBACK_OPENAI_KEY", "sk-shared-fallback");
+// The old shared-key setting. Set on purpose: nothing may ever hand it out.
+Deno.env.set("FALLBACK_OPENAI_KEY", "sk-real-shared");
 
 await import("../issue-key/index.ts");
+
+function reset(user: { id: string; email: string | null } | null) {
+  scenario.user = user;
+  scenario.allowedRow = null;
+  scenario.writes.length = 0;
+  scenario.failTable = null;
+}
 
 function call(withBearer = true) {
   return handler(
@@ -26,70 +34,74 @@ function call(withBearer = true) {
   );
 }
 
+async function sha256(text: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const inserts = (table: string) =>
+  scenario.writes.filter((w) => w.table === table && w.op === "insert");
+
 Deno.test("no bearer token -> 401", async () => {
-  const res = await call(false);
-  assertEquals(res.status, 401);
+  reset(null);
+  assertEquals((await call(false)).status, 401);
 });
 
 Deno.test("invalid token -> 401", async () => {
-  scenario.user = null;
-  const res = await call();
-  assertEquals(res.status, 401);
+  reset(null);
+  assertEquals((await call()).status, 401);
 });
 
-Deno.test("signed in, NOT approved -> 403, no key, nothing logged", async () => {
-  scenario.user = { id: "u1", email: "stranger@gmail.com" };
-  scenario.apiKeyRow = null;
-  scenario.allowedRow = null;
-  scenario.issues.length = 0;
+Deno.test("signed in, NOT approved -> 403, no key, nothing written", async () => {
+  reset({ id: "u1", email: "stranger@gmail.com" });
   const res = await call();
   assertEquals(res.status, 403);
   assertEquals((await res.json()).key, undefined);
-  assertEquals(scenario.issues.length, 0);
-});
-
-Deno.test("signed in, email approved -> 200 with shared key", async () => {
-  scenario.user = { id: "u2", email: "Approved@Company.com" };
-  scenario.apiKeyRow = null;
-  scenario.allowedRow = { email: "approved@company.com" };
-  scenario.issues.length = 0;
-  const res = await call();
-  assertEquals(res.status, 200);
-  assertEquals((await res.json()).key, "sk-shared-fallback");
-  assertEquals(scenario.issues.length, 1);
-});
-
-Deno.test("personal key wins even without allowlist entry", async () => {
-  scenario.user = { id: "u3", email: "own@key.com" };
-  scenario.apiKeyRow = { key: "sk-personal", revoked: false };
-  scenario.allowedRow = null;
-  const res = await call();
-  assertEquals(res.status, 200);
-  assertEquals((await res.json()).key, "sk-personal");
-});
-
-Deno.test("revoked personal row -> 403 even if email allowed", async () => {
-  scenario.user = { id: "u4", email: "revoked@company.com" };
-  scenario.apiKeyRow = { key: "sk-old", revoked: true };
-  scenario.allowedRow = { email: "revoked@company.com" };
-  const res = await call();
-  assertEquals(res.status, 403);
+  assertEquals(scenario.writes.length, 0);
 });
 
 Deno.test("user with no email -> 403", async () => {
-  scenario.user = { id: "u5", email: null };
-  scenario.apiKeyRow = null;
-  scenario.allowedRow = null;
-  const res = await call();
-  assertEquals(res.status, 403);
+  reset({ id: "u2", email: null });
+  assertEquals((await call()).status, 403);
 });
 
-Deno.test("approved but fallback key unset -> 503", async () => {
-  Deno.env.delete("FALLBACK_OPENAI_KEY");
-  scenario.user = { id: "u6", email: "approved@company.com" };
-  scenario.apiKeyRow = null;
-  scenario.allowedRow = { email: "approved@company.com" };
+Deno.test("approved -> a new personal key; only its hash stored; never the real key", async () => {
+  reset({ id: "u3", email: "Eng@Company.com" });
+  scenario.allowedRow = { email: "eng@company.com" };
   const res = await call();
-  assertEquals(res.status, 503);
-  Deno.env.set("FALLBACK_OPENAI_KEY", "sk-shared-fallback");
+  assertEquals(res.status, 200);
+  const { key } = await res.json();
+  assert(/^cum_[0-9a-f]{64}$/.test(key), `unexpected key shape: ${key}`);
+  assertNotEquals(key, "sk-real-shared");
+
+  const [saved] = inserts("gateway_keys");
+  assertEquals(saved.row, { key_hash: await sha256(key), engineer: "u3", email: "eng@company.com" });
+  // The key itself is written nowhere.
+  assert(!JSON.stringify(scenario.writes).includes(key));
+  assertEquals(inserts("key_issues").length, 1);
+});
+
+Deno.test("a new key leaves the person's other keys (other machines) working", async () => {
+  reset({ id: "u4", email: "eng@company.com" });
+  scenario.allowedRow = { email: "eng@company.com" };
+  await call();
+  assertEquals(scenario.writes.filter((w) => w.op === "update").length, 0);
+});
+
+Deno.test("two calls -> two different keys", async () => {
+  reset({ id: "u5", email: "eng@company.com" });
+  scenario.allowedRow = { email: "eng@company.com" };
+  const a = (await (await call()).json()).key;
+  const b = (await (await call()).json()).key;
+  assertNotEquals(a, b);
+});
+
+Deno.test("key cannot be saved -> 500, no key handed out", async () => {
+  reset({ id: "u6", email: "eng@company.com" });
+  scenario.allowedRow = { email: "eng@company.com" };
+  scenario.failTable = "gateway_keys";
+  const res = await call();
+  assertEquals(res.status, 500);
+  assertEquals((await res.json()).key, undefined);
+  assertEquals(inserts("key_issues").length, 0);
 });

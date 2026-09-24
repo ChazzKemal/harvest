@@ -333,3 +333,78 @@ create policy corrections_read_admin on corrections
 drop policy if exists chats_read_admin on chats;
 create policy chats_read_admin on chats
   for select using (public.is_admin());
+
+-- ----------------------------------------------------------------- gateway
+-- The gateway (gateway/, a Cloudflare Worker) sits between everyone's Codex and
+-- OpenAI. The real OpenAI key lives only there; each person holds their own
+-- gateway key, issued by issue-key.
+--
+-- Only a key's sha256 is kept, never the key: a leak of this table gives
+-- nobody a working key. Each sign-in gets its own key, so someone on two
+-- machines has two; set revoked on one to cut off just that machine.
+create table if not exists gateway_keys (
+  key_hash   text primary key,
+  engineer   uuid not null references engineers(id) on delete cascade,
+  email      text not null check (email = lower(email)),
+  revoked    boolean not null default false,
+  created_at timestamptz not null default now()
+);
+create index if not exists gateway_keys_engineer on gateway_keys (engineer);
+
+-- One row per model response: who, which model, how many tokens, what it cost.
+-- Never the prompt or the answer.
+create table if not exists gateway_usage (
+  id            bigint generated always as identity primary key,
+  engineer      uuid not null references engineers(id) on delete cascade,
+  model         text,
+  input_tokens  integer not null default 0,
+  cached_tokens integer not null default 0,
+  output_tokens integer not null default 0,
+  cost_usd      numeric(12, 6),
+  at            timestamptz not null default now()
+);
+create index if not exists gateway_usage_engineer_at on gateway_usage (engineer, at);
+
+-- A different monthly budget for one person; everyone else gets the gateway's
+-- MONTHLY_BUDGET_USD. Set one with:
+--   insert into gateway_budgets (email, monthly_usd) values ('person@company.com', 50)
+--   on conflict (email) do update set monthly_usd = excluded.monthly_usd;
+create table if not exists gateway_budgets (
+  email       text primary key check (email = lower(email)),
+  monthly_usd numeric(10, 2) not null
+);
+
+alter table gateway_keys    enable row level security;
+alter table gateway_usage   enable row level security;
+alter table gateway_budgets enable row level security;
+alter table gateway_keys    force row level security;
+alter table gateway_usage   force row level security;
+alter table gateway_budgets force row level security;
+
+drop policy if exists gateway_usage_read_admin on gateway_usage;
+create policy gateway_usage_read_admin on gateway_usage
+  for select using (public.is_admin());
+
+-- Everything the gateway needs to decide on one request, in one round trip.
+-- No row back means no access: an unknown or revoked key, or an email no longer
+-- approved - so taking someone out of allowed_emails cuts them off at once.
+create or replace function public.gateway_check(p_key_hash text)
+returns table (engineer uuid, email text, spent_usd numeric, budget_usd numeric)
+language sql
+stable
+set search_path = ''
+as $$
+  select k.engineer,
+         k.email,
+         coalesce((select sum(u.cost_usd) from public.gateway_usage u
+                   where u.engineer = k.engineer
+                     and u.at >= date_trunc('month', now())), 0),
+         (select b.monthly_usd from public.gateway_budgets b where b.email = k.email)
+  from public.gateway_keys k
+  join public.allowed_emails a on a.email = k.email
+  where k.key_hash = p_key_hash and not k.revoked;
+$$;
+-- Functions in public are callable through the API by default. This one is for
+-- the gateway's secret key only.
+revoke execute on function public.gateway_check(text) from public, anon, authenticated;
+grant execute on function public.gateway_check(text) to service_role;
