@@ -313,6 +313,31 @@ Deno.test("an OpenAI error is passed back as is, and nothing recorded", async ()
   assertEquals(usageRows().length, 0);
 });
 
+Deno.test("a stream cut off before the final event is logged, with no content, and nothing recorded", async () => {
+  reset();
+  const { key } = await person();
+  const cut = `event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"secret text"}\n\n`;
+  openai = () =>
+    new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(cut)); c.close(); } }),
+      { headers: { "Content-Type": "text/event-stream", "x-request-id": "req_cut" } });
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (m: string) => void warned.push(m);
+  try {
+    const { ctx, settle } = ctxFor();
+    await (await worker.fetch(request(key), env(), ctx)).text();
+    await settle();
+  } finally {
+    console.warn = realWarn;
+  }
+  assertEquals(usageRows().length, 0);
+  assertEquals(warned.length, 1);
+  const w = JSON.parse(warned[0]);
+  assertEquals(w.problem, "stream_ended_without_completion");
+  assertEquals(w.request_id, "req_cut");
+  assert(!warned[0].includes("secret text"));
+});
+
 Deno.test("GET /v1/models passes through, key still required", async () => {
   reset();
   const { key } = await person();
