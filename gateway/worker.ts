@@ -255,9 +255,15 @@ export default {
         headers,
         body,
       });
-    } catch {
+    } catch (e) {
+      console.warn(JSON.stringify({ problem: "openai_unreachable", email: who.email, model, error: String(e) }));
       return error(502, "OpenAI could not be reached. Try again in a moment.");
     }
+
+    // For the Worker's logs (Cloudflare dashboard, or `wrangler tail`): enough to
+    // tell a refusal from OpenAI apart from a cut connection. Never any content.
+    const trace = { email: who.email, model, status: upstream.status, request_id: upstream.headers.get("x-request-id") };
+    if (upstream.status >= 400) console.warn(JSON.stringify({ problem: "openai_error", ...trace }));
 
     const out = new Headers();
     for (const [k, v] of upstream.headers) if (!DROP_RESPONSE.test(k)) out.set(k, v);
@@ -270,11 +276,13 @@ export default {
       const person = who;
       let streamed!: ReadableStream<Uint8Array>;
       // Recorded after the last byte, without holding the answer up. A stream
-      // that ends without usage (cut off, failed) records nothing.
+      // that ends without usage was cut short upstream: nothing to record, but
+      // logged, since Codex will report "stream disconnected".
       const recorded = new Promise<void>((resolve) => {
-        const tap = usageTap((found) =>
-          resolve(found ? record(env, person, keyHash, found.model || model, found.usage) : undefined)
-        );
+        const tap = usageTap((found) => {
+          if (!found) console.warn(JSON.stringify({ problem: "stream_ended_without_completion", ...trace }));
+          resolve(found ? record(env, person, keyHash, found.model || model, found.usage) : undefined);
+        });
         streamed = upstream.body!.pipeThrough(tap);
       });
       ctx.waitUntil(recorded);

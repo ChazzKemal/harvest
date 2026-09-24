@@ -7,6 +7,13 @@ name = "cumulate-gateway"
 main = "worker.ts"
 compatibility_date = "2026-09-01"
 
+# Keep the Worker's logs, so a failed request can be looked at afterwards:
+# Cloudflare dashboard -> Workers & Pages -> cumulate-gateway -> Logs. Each
+# request's outcome (ok, cancelled, over the CPU limit, crashed) and the
+# gateway's own warnings. Never prompts or answers - the Worker logs none.
+[observability]
+enabled = true
+
 [vars]
 # Your Supabase project (the same one as cumulate's config.env).
 SUPABASE_URL = "https://qxdtkrsyozmpbecyccjb.supabase.co"
