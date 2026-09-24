@@ -198,6 +198,12 @@ def _merge(found: list) -> list:
         prev.checkpoint_count = prev.checkpoint_count or s.checkpoint_count
         prev.added = prev.added or s.added
         prev.removed = prev.removed or s.removed
+        # Only the Codex store knows which files were touched, so only its copy
+        # can have the source. Leaving these out of the merge meant the empty
+        # half won every time and `sources` was blank on every session.
+        prev.commit_log = prev.commit_log or s.commit_log
+        prev.sources = prev.sources or s.sources
+        prev.inputs = prev.inputs or s.inputs
         # Entire's checkpoint id is the durable one; keep it over "codex:..."
         if s.checkpoint_id and not s.checkpoint_id.startswith("codex:"):
             prev.checkpoint_id = s.checkpoint_id
