@@ -96,9 +96,10 @@ is allowed to finish, so someone can go slightly over on their last request.
 
 ## If something goes wrong
 
-- **"This key is not valid any more"** in Codex: the person was removed, or was
-  issued a newer key elsewhere. Starting Cumulate again gets a new key, if
-  they're still approved.
+- **"This key is not valid any more"** in Codex: the person was removed from
+  `allowed_emails`, or that one key was revoked (`gateway_keys.revoked`; each
+  machine someone uses has its own key). Starting Cumulate again gets a new
+  key, if they're still approved.
 - **"budget ... is used up":** raise it as above. It takes effect within 30 seconds.
 - **"cannot check keys right now"** (502): the Worker couldn't reach Supabase.
   Check `SUPABASE_URL` in `wrangler.toml` and the `SUPABASE_SECRET_KEY` secret.
