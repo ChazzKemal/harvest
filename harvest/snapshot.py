@@ -41,6 +41,17 @@ def _safe(rel: str) -> bool:
     return not any(rel == n or rel.startswith(n) for n in NEVER)
 
 
+# Only code and notes are kept. Anything else could be data - a CSV a tool
+# wrote, a converted model, a copy of a spreadsheet - and data never travels.
+CODE = {".py", ".md", ".txt", ".toml", ".cfg", ".ini", ".yaml", ".yml", ".bat", ".cmd",
+        ".ps1", ".sh", ".command", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".html", ".css", ".sql"}
+
+
+def shareable(rel: str) -> bool:
+    """May this file's text leave the machine?"""
+    return _safe(rel) and Path(rel).suffix.lower() in CODE
+
+
 def tool_slugs(files: list[str]) -> list[str]:
     """Which tools this session touched, from the paths it changed."""
     return sorted({m.group(1) for f in files or [] if (m := TOOL.match(f))})
@@ -59,13 +70,20 @@ def sources(repo: Path, files: list[str]) -> dict[str, dict]:
         if not folder.is_dir():
             continue
         for p in sorted(folder.rglob("*")):
-            if not p.is_file() or p.suffix in (".pyc", ".png", ".jpg", ".xlsx"):
-                continue
             rel = p.relative_to(repo).as_posix()
-            if not _safe(rel):
+            if not p.is_file() or not shareable(rel):
                 continue
             body, cut = _text(p)
             out[rel] = {"text": body, "truncated": cut, "bytes": p.stat().st_size}
+
+    # Code the session wrote outside a tool folder - a script straight under
+    # tools/, say. Without this, everything such a session built went missing.
+    for rel in files or []:
+        p = repo / rel
+        if rel in out or TOOL.match(rel) or not shareable(rel) or not p.is_file():
+            continue
+        body, cut = _text(p)
+        out[rel] = {"text": body, "truncated": cut, "bytes": p.stat().st_size}
 
     # The domain record for the workspace as a whole. Small, and the single most
     # useful thing to read beside somebody else's tool.
