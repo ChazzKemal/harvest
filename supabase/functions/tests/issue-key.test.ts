@@ -81,15 +81,11 @@ Deno.test("approved -> a new personal key; only its hash stored; never the real 
   assertEquals(inserts("key_issues").length, 1);
 });
 
-Deno.test("issuing a new key revokes the previous one first", async () => {
+Deno.test("a new key leaves the person's other keys (other machines) working", async () => {
   reset({ id: "u4", email: "eng@company.com" });
   scenario.allowedRow = { email: "eng@company.com" };
   await call();
-  const revoke = scenario.writes.findIndex((w) => w.table === "gateway_keys" && w.op === "update");
-  const save = scenario.writes.findIndex((w) => w.table === "gateway_keys" && w.op === "insert");
-  assert(revoke >= 0 && revoke < save, "revoke must come before the new key");
-  assertEquals(scenario.writes[revoke].row, { revoked: true });
-  assertEquals(scenario.writes[revoke].where, ["engineer", "u4"]);
+  assertEquals(scenario.writes.filter((w) => w.op === "update").length, 0);
 });
 
 Deno.test("two calls -> two different keys", async () => {

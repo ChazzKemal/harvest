@@ -340,7 +340,8 @@ create policy chats_read_admin on chats
 -- gateway key, issued by issue-key.
 --
 -- Only a key's sha256 is kept, never the key: a leak of this table gives
--- nobody a working key. Issuing a new key revokes the person's previous one.
+-- nobody a working key. Each sign-in gets its own key, so someone on two
+-- machines has two; set revoked on one to cut off just that machine.
 create table if not exists gateway_keys (
   key_hash   text primary key,
   engineer   uuid not null references engineers(id) on delete cascade,

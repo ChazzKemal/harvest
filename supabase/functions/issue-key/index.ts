@@ -9,7 +9,7 @@
 // Cloudflare Worker); what this hands out is a personal gateway key that works
 // nowhere else, with a monthly budget, and is revoked on its own. Only its
 // sha256 is stored, so the key exists on the person's machine and nowhere
-// else. Each call makes a new key and revokes their previous one.
+// else. Each call makes a new key; earlier ones (other machines) keep working.
 //
 // Default-deny. Signing in is not enough: a key is only issued when the
 // person's email is in allowed_emails. Anyone else — any Google account in the
@@ -65,14 +65,8 @@ Deno.serve(async (req) => {
     return json({ error: "no access" }, 403);
   }
 
-  // One live key per person: the old one stops working the moment a new one
-  // is issued.
-  const { error: revokeError } = await admin
-    .from("gateway_keys").update({ revoked: true }).eq("engineer", user.id);
-  if (revokeError) {
-    return json({ error: "could not issue key" }, 500);
-  }
-
+  // A new key per sign-in, so each machine someone uses has its own and none
+  // cuts off another. Budget and spend are per person, across all of them.
   const key = newKey();
   const { error: saveError } = await admin
     .from("gateway_keys").insert({ key_hash: await sha256(key), engineer: user.id, email });
