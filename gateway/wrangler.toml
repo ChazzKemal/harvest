@@ -1,0 +1,35 @@
+# The gateway, as a Cloudflare Worker. Deploy from this folder with:
+#   npx wrangler deploy
+# Secrets are set once, separately, and never go in this file:
+#   npx wrangler secret put OPENAI_API_KEY
+#   npx wrangler secret put SUPABASE_SECRET_KEY
+name = "cumulate-gateway"
+main = "worker.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+# Your Supabase project (the same one as cumulate's config.env).
+SUPABASE_URL = "https://qxdtkrsyozmpbecyccjb.supabase.co"
+
+# Everyone's monthly budget in USD. One person's can be changed in the
+# gateway_budgets table. "0" means no budget at all.
+MONTHLY_BUDGET_USD = "20"
+
+# Only these models may be used through Cumulate. Empty allows any.
+ALLOWED_MODELS = ""
+
+# USD per 1M tokens, used to count spending against the budgets. Check these
+# against openai.com/api/pricing when you set this up, and when OpenAI changes
+# them. With a budget on, a model missing here is refused up front, and an
+# unexpected one (a dated snapshot) is priced by the longest matching name.
+PRICES = '''
+{
+  "gpt-6-astra":   { "input": 10.00, "cached_input": 1.00, "output": 50.00,
+                     "long": { "above": 272000, "input": 2, "output": 1.5 } },
+  "gpt-5.6-sol":   { "input": 5.00,  "cached_input": 0.50, "output": 30.00,
+                     "long": { "above": 272000, "input": 2, "output": 1.5 } },
+  "gpt-5.6-terra": { "input": 2.00,  "cached_input": 0.20, "output": 12.00,
+                     "long": { "above": 272000, "input": 2, "output": 1.5 } },
+  "gpt-5.6-luna":  { "input": 0.20,  "cached_input": 0.02, "output": 1.20 }
+}
+'''

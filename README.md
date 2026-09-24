@@ -49,12 +49,14 @@ create and nothing to paste. A database trigger gives each new sign-in its own
 `engineers` row, so there is nothing to provision.
 
 Signing in creates an account; it does not grant a key. `issue-key` is
-default-deny: anyone in the world can sign in with a Google account, so the
-shared `FALLBACK_OPENAI_KEY` is only handed to emails you have approved:
+default-deny: anyone in the world can sign in with a Google account, so a key
+is only issued to emails you have approved:
 
     insert into allowed_emails (email) values ('person@company.com');
 
-A personal row in `api_keys` also works and takes precedence. Everyone else
+What they get is their own key for the gateway (`gateway/`, a free Cloudflare
+Worker), never an OpenAI key: that lives only on the gateway. Budgets, spend
+per person and removing someone are all in `gateway/README.md`. Everyone else
 gets 403 and spends nothing.
 
 From then on `capture` uploads automatically; `python -m harvest upload`

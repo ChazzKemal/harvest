@@ -1,16 +1,18 @@
 // Test double for jsr:@supabase/supabase-js. The scenario object drives it.
 export type Scenario = {
   user: { id: string; email: string | null } | null;
-  apiKeyRow: { key: string | null; revoked: boolean } | null;
   allowedRow: { email: string } | null;
-  issues: unknown[];
+  // Every write, in order: which table, what, and (for updates) which rows.
+  writes: { table: string; op: "insert" | "update"; row: unknown; where?: [string, unknown] }[];
+  // Make writes to this table fail.
+  failTable: string | null;
 };
 
 export const scenario: Scenario = {
   user: null,
-  apiKeyRow: null,
   allowedRow: null,
-  issues: [],
+  writes: [],
+  failTable: null,
 };
 
 export function createClient(_url: string, _key: string) {
@@ -24,22 +26,34 @@ export function createClient(_url: string, _key: string) {
         ),
     },
     from(table: string) {
-      // deno-lint-ignore no-explicit-any
-      const result: any = table === "api_keys"
-        ? scenario.apiKeyRow
-        : table === "allowed_emails"
-        ? scenario.allowedRow
-        : null;
+      const outcome = () =>
+        Promise.resolve(
+          scenario.failTable === table
+            ? { data: null, error: { message: "write failed" } }
+            : { data: null, error: null },
+        );
       return {
         select: (_cols: string) => ({
           eq: (_col: string, _val: unknown) => ({
-            maybeSingle: () => Promise.resolve({ data: result, error: null }),
+            maybeSingle: () =>
+              Promise.resolve({
+                data: table === "allowed_emails" ? scenario.allowedRow : null,
+                error: null,
+              }),
           }),
         }),
         insert: (row: unknown) => {
-          scenario.issues.push(row);
-          return Promise.resolve({ data: null, error: null });
+          if (scenario.failTable !== table) scenario.writes.push({ table, op: "insert", row });
+          return outcome();
         },
+        update: (row: unknown) => ({
+          eq: (col: string, val: unknown) => {
+            if (scenario.failTable !== table) {
+              scenario.writes.push({ table, op: "update", row, where: [col, val] });
+            }
+            return outcome();
+          },
+        }),
       };
     },
   };
